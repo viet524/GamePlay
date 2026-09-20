@@ -850,7 +850,7 @@ export function GameExperience({ sessionId }: { sessionId: string }) {
           <div className="section-heading">
             <div>
               <p className="eyebrow">BỨC TRANH LỊCH SỬ BÍ MẬT · CHỌN Ô ĐỂ THI CÔNG & LẬT MỞ</p>
-              <h1>Lật mở bức tranh: {config.buildingName}</h1>
+              <h1>Lật mở bức tranh</h1>
             </div>
             <div className="stage-chip">
               <span>{progress}%</span> Hoàn thiện ({totalBuilt}/{state.gridStatus.length} ô)
