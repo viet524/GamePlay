@@ -34,14 +34,15 @@ import {
 } from "@/components/ui/dialog";
 import { DEFAULT_BG_MUSIC_URL, cellStage } from "@/lib/mock-game";
 import { applyMusicToAllRooms, isSupabaseConfigured, loadSession, resetGameState, saveGameState, subscribeToGameState, uploadAsset } from "@/lib/game-service";
-import type { GameSession, GameState, Question, TeamMember } from "@/lib/game-types";
+import type { GameSession, GameState, GridCellStatus, Question, TeamMember } from "@/lib/game-types";
+import { normalizeAnswerText, parseMultiSelectAnswers, getMainQuestions, getBackupsForParent, pickUnusedBackup } from "@/lib/question-answers";
 
 type Point = { x: number; y: number };
 type BuilderPhase = "idle" | "running" | "hammering" | "celebrating" | "sad";
 type ResultMessage = { kind: "success" | "error"; title: string; body: string } | null;
 
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-const normalize = (value: string) => value.trim().toLocaleLowerCase("vi").replace(/[.!?]+$/g, "");
+const normalize = (value: unknown) => normalizeAnswerText(value);
 
 function playSound(kind: "steps" | "hammer" | "success" | "crack" | "fanfare") {
   try {
@@ -66,8 +67,8 @@ function playSound(kind: "steps" | "hammer" | "success" | "crack" | "fanfare") {
       oscillator.type = kind === "crack" ? "sawtooth" : "triangle";
       oscillator.frequency.value = frequency;
       gain.gain.setValueAtTime(0.0001, context.currentTime + index * 0.14);
-      // Tăng âm lượng hiệu ứng lên 0.35 để nổi bật hơn hẳn nhạc nền
-      gain.gain.exponentialRampToValueAtTime(0.35, context.currentTime + index * 0.14 + 0.015);
+      // Tăng âm lượng hiệu ứng lên 0.5 để nổi bật hơn hẳn nhạc nền
+      gain.gain.exponentialRampToValueAtTime(0.5, context.currentTime + index * 0.14 + 0.015);
       gain.gain.exponentialRampToValueAtTime(0.0001, context.currentTime + index * 0.14 + 0.11);
       oscillator.connect(gain).connect(context.destination);
       oscillator.start(context.currentTime + index * 0.14);
@@ -121,6 +122,9 @@ export function GameExperience({ sessionId }: { sessionId: string }) {
   const [isUploadingMusic, setIsUploadingMusic] = useState(false);
   const [isApplyingAllMusic, setIsApplyingAllMusic] = useState(false);
   const musicFileRef = useRef<HTMLInputElement | null>(null);
+  // Track whether user has interacted (for autoplay policy unlock)
+  const hasInteractedRef = useRef(false);
+  const pendingAutoPlayRef = useRef(false);
 
   const stageRef = useRef<HTMLDivElement>(null);
   const cellRefs = useRef<Record<string, HTMLButtonElement | null>>({});
@@ -288,6 +292,26 @@ export function GameExperience({ sessionId }: { sessionId: string }) {
   // Quản lý Audio nhạc nền: Giới hạn âm lượng BGM tối đa 35% để luôn làm nền êm dịu
   const bgmVolume = Math.min(1, Math.max(0, volume * 0.35));
 
+  // Autoplay: play BGM on first user interaction (click/keydown/touchstart)
+  useEffect(() => {
+    const tryPlay = () => {
+      if (hasInteractedRef.current) return;
+      hasInteractedRef.current = true;
+      if (pendingAutoPlayRef.current && audioRef.current && musicUrl) {
+        void audioRef.current.play().then(() => setIsPlaying(true)).catch(() => {});
+        pendingAutoPlayRef.current = false;
+      }
+    };
+    window.addEventListener("click", tryPlay, { once: true });
+    window.addEventListener("keydown", tryPlay, { once: true });
+    window.addEventListener("touchstart", tryPlay, { once: true });
+    return () => {
+      window.removeEventListener("click", tryPlay);
+      window.removeEventListener("keydown", tryPlay);
+      window.removeEventListener("touchstart", tryPlay);
+    };
+  }, [musicUrl]);
+
   useEffect(() => {
     if (!musicUrl) return;
     if (!audioRef.current) {
@@ -298,7 +322,17 @@ export function GameExperience({ sessionId }: { sessionId: string }) {
     audio.src = musicUrl;
     audio.volume = bgmVolume;
     audio.muted = isMuted;
-    if (isPlaying) void audio.play().catch(() => {/* autoplay policy */});
+    // Try auto-play immediately; if blocked, set flag for first interaction
+    const playPromise = audio.play();
+    if (playPromise !== undefined) {
+      void playPromise.then(() => {
+        setIsPlaying(true);
+        hasInteractedRef.current = true;
+      }).catch(() => {
+        // Autoplay blocked – will play on first user interaction
+        pendingAutoPlayRef.current = true;
+      });
+    }
     return () => { audio.pause(); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [musicUrl]);
@@ -403,7 +437,7 @@ export function GameExperience({ sessionId }: { sessionId: string }) {
   // Xác định ô gợi ý tiếp theo
   const suggestedTargetIndex = useMemo(() => {
     if (!session) return -1;
-    return session.state.gridStatus.findIndex((cell) => cell.status !== "built");
+    return session.state.gridStatus.findIndex((cell) => cell.status === "empty" || cell.status === "failed");
   }, [session]);
 
   // Xử lý khi người chơi bấm trực tiếp vào một ô bất kỳ trên lưới
@@ -425,22 +459,54 @@ export function GameExperience({ sessionId }: { sessionId: string }) {
       return;
     }
 
-    // 2. Ô chưa thi công hoặc cần sửa lại -> Kỹ sư di chuyển tới
+    // 2. Ô đã khóa hết câu phụ
+    if (targetCell.status === "locked") {
+      await moveToCell(targetCell.cellId);
+      setPhase("idle");
+      setResult({
+        kind: "error",
+        title: "Ô này đã bị khóa!",
+        body: "Bạn đã hết câu hỏi phụ cho mảnh ghép này nên không thể mở lại. Hãy thi công các ô còn lại.",
+      });
+      return;
+    }
+
+    // 3. Ô chưa thi công hoặc cần sửa lại -> Kỹ sư di chuyển tới
     setSelectedTargetIndex(clickedIndex);
     await moveToCell(targetCell.cellId);
     setPhase("idle");
 
-    // Lấy câu hỏi tương ứng cho ô này từ ngân hàng câu hỏi
-    const allMainQuestions = config.stagesData.flatMap((s) => s.questions).filter((q) => !q.isBackup);
-    const allBackupQuestions = config.stagesData.flatMap((s) => s.questions).filter((q) => q.isBackup);
+    const allQuestions = config.stagesData.flatMap((s) => s.questions);
+    const allMainQuestions = getMainQuestions(allQuestions);
+    const mainQuestion = allMainQuestions[clickedIndex] ?? allMainQuestions[clickedIndex % Math.max(1, allMainQuestions.length)];
 
-    let q: Question;
-    if (targetCell.status === "failed" && allBackupQuestions.length > 0) {
-      q = allBackupQuestions[clickedIndex % allBackupQuestions.length];
-    } else if (allMainQuestions.length > 0) {
-      q = allMainQuestions[clickedIndex % allMainQuestions.length];
+    let q: Question | null = null;
+    if (targetCell.status === "failed" && mainQuestion) {
+      const backups = getBackupsForParent(allQuestions, mainQuestion.id);
+      const usedIds = targetCell.usedBackupIds ?? [];
+      q = pickUnusedBackup(backups, usedIds);
+      if (!q) {
+        const nextGrid = state.gridStatus.map((cell, index) =>
+          index === clickedIndex ? { ...cell, status: "locked" as const } : cell
+        );
+        const nextState: GameState = {
+          ...state,
+          gridStatus: nextGrid,
+          updatedAt: new Date().toISOString(),
+        };
+        setSession({ ...session, state: nextState });
+        try { await saveGameState(nextState); } catch { /* nonfatal */ }
+        setResult({
+          kind: "error",
+          title: "Ô này đã bị khóa!",
+          body: "Không còn câu hỏi phụ cho mảnh ghép này.",
+        });
+        return;
+      }
+    } else if (mainQuestion) {
+      q = mainQuestion;
     } else {
-      q = config.stagesData[0]?.questions[0] || {
+      q = allQuestions[0] || {
         id: "default-q",
         type: "mcq",
         question: "Đảng Cộng sản Việt Nam được thành lập vào ngày tháng năm nào?",
@@ -469,19 +535,17 @@ export function GameExperience({ sessionId }: { sessionId: string }) {
     let correct = false;
 
     if (selectedQuestion.type === "multi_select") {
-      let expectedAnswers: string[] = [];
-      try {
-        const parsed = JSON.parse(selectedQuestion.answer);
-        expectedAnswers = Array.isArray(parsed) ? parsed : [selectedQuestion.answer];
-      } catch {
-        expectedAnswers = selectedQuestion.answer.split(";").map((s) => s.trim()).filter(Boolean);
-      }
       if (selectedMultiAnswers.length === 0) return;
-      const normExpected = expectedAnswers.map(normalize).sort();
-      const normSelected = selectedMultiAnswers.map(normalize).sort();
-      correct =
-        normExpected.length === normSelected.length &&
-        normExpected.every((val, idx) => val === normSelected[idx]);
+      const expectedAnswers = parseMultiSelectAnswers(selectedQuestion.answer, selectedQuestion.options);
+      if (expectedAnswers.length === 0) {
+        correct = false;
+      } else {
+        const normExpected = expectedAnswers.map(normalize).sort();
+        const normSelected = selectedMultiAnswers.map(normalize).sort();
+        correct =
+          normExpected.length === normSelected.length &&
+          normExpected.every((val, idx) => val === normSelected[idx]);
+      }
     } else {
       if (!answer.trim()) return;
       correct = normalize(answer) === normalize(selectedQuestion.answer);
@@ -520,12 +584,30 @@ export function GameExperience({ sessionId }: { sessionId: string }) {
     playSound("hammer");
     await delay(1450);
 
+    const allQuestions = session.config.stagesData.flatMap((s) => s.questions);
+    const allMainQuestions = getMainQuestions(allQuestions);
+    const mainQuestion = allMainQuestions[selectedTargetIndex] ?? allMainQuestions[0];
+    const backups = mainQuestion ? getBackupsForParent(allQuestions, mainQuestion.id) : [];
+    const usedBackupIds = [...(target.usedBackupIds ?? [])];
+
+    let nextStatus: GridCellStatus["status"] = "failed";
+    if (correct) {
+      nextStatus = "built";
+    } else {
+      if (selectedQuestion.isBackup && !usedBackupIds.includes(selectedQuestion.id)) {
+        usedBackupIds.push(selectedQuestion.id);
+      }
+      const remaining = backups.filter((item) => !usedBackupIds.includes(item.id));
+      nextStatus = remaining.length === 0 ? "locked" : "failed";
+    }
+
     const nextGrid = session.state.gridStatus.map((cell, index) =>
       index === selectedTargetIndex
         ? {
             ...cell,
-            status: correct ? ("built" as const) : ("failed" as const),
+            status: nextStatus,
             builtBy: correct ? member?.id ?? null : null,
+            usedBackupIds,
           }
         : cell
     );
@@ -766,7 +848,8 @@ export function GameExperience({ sessionId }: { sessionId: string }) {
                 const col = index % config.gridCols;
                 const isBuilt = cell.status === "built";
                 const isFailed = cell.status === "failed";
-                const isTarget = index === suggestedTargetIndex;
+                const isLocked = cell.status === "locked";
+                const isTarget = index === suggestedTargetIndex && !isLocked;
 
                 const backgroundPosition = `${
                   config.gridCols === 1 ? 0 : (col / (config.gridCols - 1)) * 100
@@ -781,9 +864,15 @@ export function GameExperience({ sessionId }: { sessionId: string }) {
                     className="grid-cell"
                     data-status={cell.status}
                     data-target={isTarget}
-                    data-stage-active={!isBuilt}
+                    data-stage-active={!isBuilt && !isLocked}
                     role="gridcell"
-                    title={`Mảnh ghép số ${index + 1} (${isBuilt ? "Đã hoàn thành" : "Nhấn để thi công"})`}
+                    title={
+                      isBuilt
+                        ? `Mảnh ghép số ${index + 1} (Đã hoàn thành)`
+                        : isLocked
+                        ? `Mảnh ghép số ${index + 1} (Đã khóa — hết câu phụ)`
+                        : `Mảnh ghép số ${index + 1} (Nhấn để thi công)`
+                    }
                     onClick={() => void handleCellClick(index)}
                     style={
                       isBuilt
@@ -798,6 +887,7 @@ export function GameExperience({ sessionId }: { sessionId: string }) {
                     <span className="cell-index">{String(index + 1).padStart(2, "0")}</span>
                     {!isBuilt && <span className="cell-cross" aria-hidden="true" />}
                     {isFailed && <span className="crack-overlay" aria-hidden="true">✕</span>}
+                    {isLocked && <span className="crack-overlay" aria-hidden="true">🔒</span>}
                     {isTarget && !isBuilt && <span className="target-pulse" aria-hidden="true" />}
                     {isBuilt && (
                       <span className="built-check">
@@ -865,7 +955,10 @@ export function GameExperience({ sessionId }: { sessionId: string }) {
               <i className="legend-built" /> Đã lật mở
             </span>
             <span>
-              <i className="legend-failed" /> Cần sửa (câu dự bị)
+              <i className="legend-failed" /> Cần sửa (câu phụ)
+            </span>
+            <span>
+              <i className="legend-locked" /> Đã khóa
             </span>
             <span className="coordinate-readout" style={{ display: "flex", alignItems: "center", gap: 6 }}>
               {hasGuessedCorrectly ? (
@@ -975,7 +1068,7 @@ export function GameExperience({ sessionId }: { sessionId: string }) {
         <DialogContent className="game-dialog sm:max-w-2xl">
           <DialogHeader>
             <span className="dialog-kicker">
-              MẢNH GHÉP SỐ {selectedTargetIndex !== null ? selectedTargetIndex + 1 : ""} · {selectedQuestion?.isBackup ? "CÂU HỎI DỰ BỊ" : "CÂU HỎI CHÍNH"}
+              MẢNH GHÉP SỐ {selectedTargetIndex !== null ? selectedTargetIndex + 1 : ""} · {selectedQuestion?.isBackup ? "CÂU HỎI PHỤ" : "CÂU HỎI CHÍNH"}
             </span>
             <DialogTitle>{selectedQuestion?.question}</DialogTitle>
             <DialogDescription>
@@ -1024,13 +1117,7 @@ export function GameExperience({ sessionId }: { sessionId: string }) {
             /* 2. Chọn nhiều đáp án */
             <div className="answer-options multi-select-options">
               {selectedQuestion.options.map((option, index) => {
-                let expectedAnswers: string[] = [];
-                try {
-                  const parsed = JSON.parse(selectedQuestion.answer);
-                  expectedAnswers = Array.isArray(parsed) ? parsed : [selectedQuestion.answer];
-                } catch {
-                  expectedAnswers = selectedQuestion.answer.split(";").map((s) => s.trim()).filter(Boolean);
-                }
+                const expectedAnswers = parseMultiSelectAnswers(selectedQuestion.answer, selectedQuestion.options);
                 const isSelected = selectedMultiAnswers.includes(option);
                 const isOptionCorrect = expectedAnswers.map(normalize).includes(normalize(option));
 
@@ -1060,7 +1147,7 @@ export function GameExperience({ sessionId }: { sessionId: string }) {
                   >
                     <span className="checkbox-indicator">{isSelected ? <Check size={14} /> : null}</span>
                     <span className="option-code">{String.fromCharCode(65 + index)}</span>
-                    <span style={{ flex: 1, textAlign: "left" }}>{option}</span>
+                    <span className="option-text">{option}</span>
                     {quizState === "submitted" && isOptionCorrect && (
                       <Check size={18} style={{ color: "#16a34a", flexShrink: 0 }} />
                     )}
@@ -1091,14 +1178,15 @@ export function GameExperience({ sessionId }: { sessionId: string }) {
 
                 return (
                   <button
-                    key={option}
+                    key={`${index}-${option}`}
+                    type="button"
                     data-active={isSelected}
-                    className={extraClass}
+                    className={`multi-opt-btn ${extraClass}`}
                     disabled={quizState === "submitted"}
                     onClick={() => setAnswer(option)}
                   >
-                    <span>{String.fromCharCode(65 + index)}</span>
-                    <span style={{ flex: 1 }}>{option}</span>
+                    <span className="option-code">{String.fromCharCode(65 + index)}</span>
+                    <span className="option-text">{option}</span>
                     {quizState === "submitted" && isOptionCorrect && (
                       <Check size={18} style={{ color: "#16a34a", flexShrink: 0 }} />
                     )}
@@ -1145,14 +1233,27 @@ export function GameExperience({ sessionId }: { sessionId: string }) {
                   {(() => {
                     let ansText = selectedQuestion?.answer ?? "";
                     if (selectedQuestion?.type === "multi_select") {
-                      try {
-                        const parsed = JSON.parse(ansText);
-                        if (Array.isArray(parsed)) ansText = parsed.join(" ; ");
-                      } catch { /* fallback */ }
+                      const parsed = parseMultiSelectAnswers(ansText, selectedQuestion.options);
+                      if (parsed.length > 0) ansText = parsed.join(" ; ");
                     }
-                    return isCorrectResult
-                      ? `Đáp án đúng là: "${ansText}". Kỹ sư sẽ tiến hành gắn mảnh ghép này!`
-                      : `Đáp án chính xác là: "${ansText}" (vừa được làm nổi bật màu xanh lá phía trên). Ô này sẽ dùng câu hỏi dự bị cho lượt thi công tiếp theo!`;
+                    if (isCorrectResult) {
+                      return `Đáp án đúng là: "${ansText}". Kỹ sư sẽ tiến hành gắn mảnh ghép này!`;
+                    }
+                    const mains = getMainQuestions(config.stagesData.flatMap((s) => s.questions));
+                    const main = selectedTargetIndex != null ? mains[selectedTargetIndex] : undefined;
+                    const backups = main ? getBackupsForParent(config.stagesData.flatMap((s) => s.questions), main.id) : [];
+                    const used = [
+                      ...(selectedTargetIndex != null ? (state.gridStatus[selectedTargetIndex]?.usedBackupIds ?? []) : []),
+                    ];
+                    if (selectedQuestion?.isBackup && selectedQuestion.id && !used.includes(selectedQuestion.id)) {
+                      used.push(selectedQuestion.id);
+                    }
+                    const remaining = backups.filter((item) => !used.includes(item.id)).length;
+                    return `Đáp án chính xác là: "${ansText}" (vừa được làm nổi bật màu xanh lá phía trên). ${
+                      remaining > 0
+                        ? `Lần sau ô này sẽ lấy ngẫu nhiên 1 trong ${remaining} câu hỏi phụ còn lại.`
+                        : "Ô này đã hết câu hỏi phụ và sẽ bị khóa, không mở lại được."
+                    }`;
                   })()}
                 </span>
               </div>
@@ -1308,7 +1409,7 @@ export function GameExperience({ sessionId }: { sessionId: string }) {
 
       {/* Dialog cài đặt nhạc nền */}
       <Dialog open={musicOpen} onOpenChange={setMusicOpen}>
-        <DialogContent className="game-dialog" style={{ maxWidth: 480 }}>
+        <DialogContent className="game-dialog" style={{ maxWidth: 480, height: "auto" }}>
           <DialogHeader>
             <span className="dialog-kicker" style={{ color: "#4f46e5" }}>NHẠC NỀN TRÒ CHƠI</span>
             <DialogTitle>Cài đặt nhạc nền</DialogTitle>
@@ -1319,7 +1420,7 @@ export function GameExperience({ sessionId }: { sessionId: string }) {
           <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
             <label style={{ display: "flex", flexDirection: "column", gap: 6 }}>
               <span style={{ fontSize: "0.75rem", fontWeight: 700, color: "#64736e" }}>URL bài nhạc:</span>
-              <div style={{ display: "flex", gap: 8 }}>
+              <div style={{ display: "flex", gap: 8, alignItems: "stretch", flexWrap: "wrap" }}>
                 <input
                   type="url"
                   value={musicInput}
@@ -1365,11 +1466,11 @@ export function GameExperience({ sessionId }: { sessionId: string }) {
             />
             {musicUrl && (
               <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 4 }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: 10 }}>
+                <div style={{ display: "flex", alignItems: "flex-start", gap: 10, padding: "10px 14px", background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: 10 }}>
                   <Music2 size={18} style={{ color: "#16a34a", flexShrink: 0 }} />
-                  <div style={{ flex: 1, overflow: "hidden" }}>
+                  <div style={{ flex: 1, minWidth: 0, overflow: "visible" }}>
                     <span style={{ fontSize: "0.72rem", fontWeight: 700, color: "#166534", display: "block" }}>ĐANG DÙNG NHẠC</span>
-                    <span style={{ fontSize: "0.8rem", color: "#064e3b", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "block" }}>{musicUrl.startsWith("blob:") ? "File nhạc từ máy tính" : musicUrl}</span>
+                    <span style={{ fontSize: "0.8rem", color: "#064e3b", display: "block", whiteSpace: "normal", overflowWrap: "anywhere", wordBreak: "break-word" }}>{musicUrl.startsWith("blob:") ? "File nhạc từ máy tính" : musicUrl}</span>
                   </div>
                   <Button
                     type="button" variant="ghost" style={{ color: "#dc2626", padding: "4px 8px", minWidth: 0 }}

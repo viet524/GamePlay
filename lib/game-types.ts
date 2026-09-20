@@ -1,5 +1,5 @@
 export type QuestionType = "mcq" | "multi_select" | "true_false" | "crossword";
-export type CellState = "empty" | "built" | "failed";
+export type CellState = "empty" | "built" | "failed" | "locked";
 
 export interface Question {
   id: string;
@@ -8,6 +8,7 @@ export interface Question {
   options: string[];
   answer: string;
   isBackup?: boolean;
+  parentQuestionId?: string;
 }
 
 export interface StageConfig {
@@ -52,6 +53,7 @@ export interface GridCellStatus {
   cellId: string;
   status: CellState;
   builtBy: string | null;
+  usedBackupIds?: string[];
 }
 
 export interface GameState {
@@ -70,4 +72,16 @@ export interface GameSession {
   config: GameConfig;
   members: TeamMember[];
   state: GameState;
+}
+
+export function hasGameProgress(state: GameState | null | undefined): boolean {
+  if (!state) return false;
+  return (
+    Boolean(state.completed) ||
+    Boolean(state.hasGuessedCorrectly) ||
+    Boolean(state.guessedName?.trim()) ||
+    (state.gridStatus ?? []).some(
+      (cell) => cell.status === "built" || cell.status === "failed" || cell.status === "locked"
+    )
+  );
 }

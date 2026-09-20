@@ -1,14 +1,17 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import Link from "next/link";
+import { useEffect, useRef, useState } from "react";
 import {
   ArrowLeft,
   Check,
   Copy,
+  Download,
   ExternalLink,
+  FileUp,
+  Gamepad2,
   ImagePlus,
   Plus,
+  RotateCcw,
   Save,
   Trash2,
   Upload,
@@ -30,10 +33,21 @@ import {
   isSupabaseConfigured,
   listPublicRooms,
   loadSession,
+  resetGameState,
   saveSession,
   uploadAsset,
 } from "@/lib/game-service";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import type { GameSession, Question, RoomSummary } from "@/lib/game-types";
+import { hasGameProgress } from "@/lib/game-types";
+import {
+  detectCsvDelimiter,
+  getBackupsForParent,
+  getMainQuestions,
+  parseCsvRow,
+  parseMultiSelectAnswers,
+  stringifyMultiSelectAnswers,
+} from "@/lib/question-answers";
 
 const COLORS = ["#b91f2e", "#276745", "#d97706", "#2563eb", "#7c3aed", "#db2777"];
 
@@ -87,6 +101,149 @@ export default function AdminPage() {
   const [rooms, setRooms] = useState<RoomSummary[]>([]);
   const [status, setStatus] = useState("");
   const [saving, setSaving] = useState(false);
+  const [csvError, setCsvError] = useState("");
+  const csvInputRef = useRef<HTMLInputElement | null>(null);
+  const [playChoiceOpen, setPlayChoiceOpen] = useState(false);
+  const [isCheckingPlay, setIsCheckingPlay] = useState(false);
+  const [isResettingPlay, setIsResettingPlay] = useState(false);
+
+  // Download CSV template
+  const downloadCsvTemplate = () => {
+    const rows = [
+      "type,question,option_a,option_b,option_c,option_d,answer,is_backup,parent_index",
+      'mcq,"Đảng Cộng sản Việt Nam được thành lập năm nào?",1930,1945,1954,1975,1930,0,',
+      'mcq,"Câu phụ cho câu 1 (lần thử 2)",1930,1941,1945,1954,1930,1,1',
+      'multi_select,"Chọn các mốc lịch sử quan trọng",1930,1945,1954,1975,"1930|1945",0,',
+      'true_false,"Việt Nam tuyên bố độc lập năm 1945 đúng không?",,,,,Đúng,0,',
+      'crossword,"Ngày Quốc khánh Việt Nam",,,,,2 THÁNG 9,0,',
+    ].join("\n");
+    const blob = new Blob(["\uFEFF" + rows], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "mau-cau-hoi.csv";
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  // Parse & import CSV
+  const importCsvQuestions = (file: File) => {
+    setCsvError("");
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const text = ((e.target?.result as string) ?? "").replace(/^\uFEFF/, "");
+        const lines = text.replace(/\r/g, "").split("\n").filter((l) => l.trim());
+        if (lines.length < 2) { setCsvError("File CSV trống hoặc không có dữ liệu."); return; }
+
+        const delimiter = detectCsvDelimiter(lines[0]);
+        const headers = parseCsvRow(lines[0], delimiter).map((h) => h.toLowerCase().trim());
+        const typeIdx = headers.indexOf("type");
+        const qIdx = headers.indexOf("question");
+        const aIdx = headers.indexOf("option_a");
+        const bIdx = headers.indexOf("option_b");
+        const cIdx = headers.indexOf("option_c");
+        const dIdx = headers.indexOf("option_d");
+        const ansIdx = headers.indexOf("answer");
+        const backupIdx = headers.indexOf("is_backup");
+        const parentIdx = headers.indexOf("parent_index");
+
+        if (typeIdx < 0 || qIdx < 0 || ansIdx < 0) {
+          setCsvError("Định dạng CSV không đúng. Bản cần các cột: type, question, answer. Hãy tải file mẫu từ nút \"Tải mẫu CSV\".");
+          return;
+        }
+
+        const imported: import("@/lib/game-types").Question[] = [];
+        const importedParentIndex: number[] = [];
+        const errors: string[] = [];
+
+        for (let i = 1; i < lines.length; i++) {
+          const fields = parseCsvRow(lines[i], delimiter);
+          if (fields.every((f) => !f)) continue;
+          const type = (fields[typeIdx] ?? "").toLowerCase() as import("@/lib/game-types").QuestionType;
+          const question = fields[qIdx] ?? "";
+          const optA = fields[aIdx] ?? "";
+          const optB = fields[bIdx] ?? "";
+          const optC = fields[cIdx] ?? "";
+          const optD = fields[dIdx] ?? "";
+          const answer = fields[ansIdx] ?? "";
+          const isBackup = String(fields[backupIdx] ?? "0").trim() === "1";
+          const parentIndexRaw = parentIdx >= 0 ? Number(String(fields[parentIdx] ?? "").trim()) : NaN;
+
+          if (!question) { errors.push(`Dòng ${i + 1}: Thiếu nội dung câu hỏi.`); continue; }
+          if (!answer) { errors.push(`Dòng ${i + 1}: Thiếu đáp án.`); continue; }
+          if (!["mcq", "multi_select", "true_false", "crossword"].includes(type)) {
+            errors.push(`Dòng ${i + 1}: Loại câu hỏi "${type}" không hợp lệ.`); continue;
+          }
+
+          const options = [optA, optB, optC, optD].filter(Boolean);
+          let normalizedAnswer = answer;
+          if (type === "multi_select") {
+            const matched = parseMultiSelectAnswers(answer, options);
+            if (matched.length === 0) {
+              errors.push(`Dòng ${i + 1}: Câu chọn nhiều đáp án chưa tick được đáp án nào. Dùng dấu ; trong cột answer, ví dụ 1930;1945, và phải trùng chữ với các lựa chọn.`);
+              continue;
+            }
+            normalizedAnswer = stringifyMultiSelectAnswers(matched);
+          } else if (type === "mcq" && options.length > 0) {
+            const matchedOption = options.find((item) => item.trim() === answer.trim()) ?? options.find((item) => item.trim().toLocaleLowerCase("vi") === answer.trim().toLocaleLowerCase("vi"));
+            if (matchedOption) normalizedAnswer = matchedOption;
+          }
+
+          if (isBackup && (!Number.isInteger(parentIndexRaw) || parentIndexRaw < 1)) {
+            errors.push(`Dòng ${i + 1}: Câu phụ phải có parent_index (số thứ tự câu chính, bắt đầu từ 1).`);
+            continue;
+          }
+
+          imported.push({
+            id: crypto.randomUUID(),
+            type,
+            question,
+            options: type === "true_false" ? ["\u0110úng", "Sai"] : type === "crossword" ? [] : options,
+            answer: normalizedAnswer,
+            isBackup,
+          });
+          importedParentIndex.push(isBackup ? parentIndexRaw : 0);
+        }
+
+        if (errors.length > 0) {
+          setCsvError(errors.slice(0, 5).join(" | ") + (errors.length > 5 ? ` ... và ${errors.length - 5} lỗi khác.` : ""));
+        }
+
+        if (imported.length === 0) { setCsvError((csvError ? csvError + " | " : "") + "Không import được câu hỏi nào."); return; }
+
+        setSession((current) => {
+          const existingMains = getMainQuestions(current.config.stagesData.flatMap((s) => s.questions));
+          const importedMains = imported.filter((q) => !q.isBackup);
+          const mainLookup = [...existingMains, ...importedMains];
+          const resolved = imported.map((q, index) => {
+            if (!q.isBackup) return q;
+            const parent = mainLookup[importedParentIndex[index] - 1];
+            return parent ? { ...q, parentQuestionId: parent.id } : q;
+          });
+          const dangling = resolved.filter((q) => q.isBackup && !q.parentQuestionId).length;
+          if (dangling > 0) {
+            queueMicrotask(() => {
+              setCsvError((prev) => (prev ? `${prev} | ` : "") + `${dangling} câu phụ chưa gắn được câu chính (kiểm tra parent_index).`);
+            });
+          }
+          return {
+            ...current,
+            config: {
+              ...current.config,
+              stagesData: current.config.stagesData.map((s, idx) =>
+                idx === 0 ? { ...s, questions: [...s.questions, ...resolved] } : s
+              ),
+            },
+          };
+        });
+        setStatus(`✅ Đã import thành công ${imported.length} câu hỏi từ CSV!`);
+      } catch {
+        setCsvError("Lỗi phân tích file CSV. Kiểm tra lại định dạng file.");
+      }
+    };
+    reader.readAsText(file, "utf-8");
+  };
 
   useEffect(() => {
     let mounted = true;
@@ -165,7 +322,7 @@ export default function AdminPage() {
     }));
   };
 
-  const addQuestion = (isBackup = false) => {
+  const addQuestion = (isBackup = false, parentQuestionId?: string) => {
     const newQ: Question = {
       id: crypto.randomUUID(),
       type: "mcq",
@@ -173,6 +330,7 @@ export default function AdminPage() {
       options: ["Lựa chọn A", "Lựa chọn B", "Lựa chọn C", "Lựa chọn D"],
       answer: "Lựa chọn A",
       isBackup,
+      parentQuestionId: isBackup ? parentQuestionId : undefined,
     };
     setSession((current) => {
       const stages = current.config.stagesData.length > 0
@@ -197,7 +355,9 @@ export default function AdminPage() {
         ...current.config,
         stagesData: current.config.stagesData.map((stage) => ({
           ...stage,
-          questions: stage.questions.filter((q) => q.id !== questionId),
+          questions: stage.questions.filter(
+            (q) => q.id !== questionId && q.parentQuestionId !== questionId
+          ),
         })),
       },
     }));
@@ -273,12 +433,32 @@ export default function AdminPage() {
       return;
     }
 
+    const allToValidate = session.config.stagesData.flatMap((s) => s.questions);
+    const multiWithoutTick = allToValidate.find(
+      (q) => q.type === "multi_select" && parseMultiSelectAnswers(q.answer, q.options).length === 0
+    );
+    if (multiWithoutTick) {
+      setStatus("❌ Câu chọn nhiều đáp án phải tick ít nhất một ô đúng. Không để đáp án dạng chữ mà không khớp lựa chọn.");
+      return;
+    }
+
+    const normalizedStages = session.config.stagesData.map((stage) => ({
+      ...stage,
+      questions: stage.questions.map((q) => {
+        if (q.type !== "multi_select") return q;
+        return {
+          ...q,
+          answer: stringifyMultiSelectAnswers(parseMultiSelectAnswers(q.answer, q.options)),
+        };
+      }),
+    }));
+
     setSaving(true);
     setStatus("Đang lưu cấu hình vào Supabase…");
-    const { rows, cols } = getAutomaticGrid(session.config.stagesData);
+    const { rows, cols } = getAutomaticGrid(normalizedStages);
     const next: GameSession = {
       ...session,
-      config: { ...session.config, gridRows: rows, gridCols: cols },
+      config: { ...session.config, stagesData: normalizedStages, gridRows: rows, gridCols: cols },
       state:
         session.state.gridStatus.length === rows * cols
           ? session.state
@@ -307,23 +487,53 @@ export default function AdminPage() {
   };
 
   const playPath = `/play/${session.config.sessionId}`;
-  const automaticGrid = getAutomaticGrid(session.config.stagesData);
-  const allQuestions = session.config.stagesData.flatMap((stage) => stage.questions);
-  const allMainQuestions = allQuestions.filter((q) => !q.isBackup);
-  const allBackupQuestions = allQuestions.filter((q) => q.isBackup);
-  const totalQuestions = allQuestions.length;
 
-  const getMultiAnswers = (raw: string): string[] => {
+  const handleEnterPlay = async () => {
+    setIsCheckingPlay(true);
     try {
-      const parsed = JSON.parse(raw);
-      return Array.isArray(parsed) ? parsed : [raw];
+      const loaded = await loadSession(session.config.sessionId);
+      if (!hasGameProgress(loaded.state)) {
+        window.location.href = playPath;
+        return;
+      }
+      setPlayChoiceOpen(true);
     } catch {
-      return raw ? raw.split(";").map((s) => s.trim()).filter(Boolean) : [];
+      window.location.href = playPath;
+    } finally {
+      setIsCheckingPlay(false);
     }
   };
 
-  const renderQuestionEditor = (question: Question, questionIndex: number, isBackup: boolean) => {
-    const multiAnswers = getMultiAnswers(question.answer);
+  const handleContinuePlay = () => {
+    setPlayChoiceOpen(false);
+    window.location.href = playPath;
+  };
+
+  const handleResetAndPlay = async () => {
+    setIsResettingPlay(true);
+    try {
+      const loaded = await loadSession(session.config.sessionId);
+      await resetGameState(loaded);
+      setPlayChoiceOpen(false);
+      window.location.href = playPath;
+    } catch {
+      window.location.href = playPath;
+    } finally {
+      setIsResettingPlay(false);
+    }
+  };
+  const automaticGrid = getAutomaticGrid(session.config.stagesData);
+  const allQuestions = session.config.stagesData.flatMap((stage) => stage.questions);
+  const allMainQuestions = getMainQuestions(allQuestions);
+  const unassignedBackups = allQuestions.filter((q) => q.isBackup && !q.parentQuestionId);
+  const totalQuestions = allQuestions.length;
+
+  const getMultiAnswers = (raw: string, options: string[] = []): string[] => {
+    return parseMultiSelectAnswers(raw, options);
+  };
+
+  const renderQuestionEditor = (question: Question, questionIndex: number, isBackup: boolean, mainNumber?: number) => {
+    const multiAnswers = getMultiAnswers(question.answer, question.options);
 
     return (
       <div className="question-card" key={question.id} style={isBackup ? { background: "#fffdf9" } : undefined}>
@@ -376,13 +586,17 @@ export default function AdminPage() {
                 borderRadius: 6,
               }}
             >
-              {isBackup ? `Câu dự bị #${questionIndex + 1}` : `Ô mảnh ghép #${questionIndex + 1}`}
+              {isBackup
+                ? `Câu phụ ${mainNumber ?? "?"}.${questionIndex + 1}`
+                : `Ô mảnh ghép #${questionIndex + 1}`}
             </span>
           </div>
 
-          <input
+          <textarea
+            className="question-text-input"
+            rows={2}
             value={question.question}
-            placeholder={isBackup ? "Nhập nội dung câu hỏi dự bị…" : "Nhập nội dung câu hỏi…"}
+            placeholder={isBackup ? "Nhập nội dung câu hỏi phụ…" : "Nhập nội dung câu hỏi…"}
             onChange={(event) =>
               updateQuestion(question.id, {
                 question: event.target.value,
@@ -402,7 +616,9 @@ export default function AdminPage() {
                   return (
                     <div key={optIdx} className="option-row">
                       <span className="option-letter">{String.fromCharCode(65 + optIdx)}</span>
-                      <input
+                      <textarea
+                        className="option-text-input"
+                        rows={1}
                         value={option}
                         placeholder={`Lựa chọn ${String.fromCharCode(65 + optIdx)}…`}
                         onChange={(event) => {
@@ -487,16 +703,18 @@ export default function AdminPage() {
                           type="checkbox"
                           checked={isChecked}
                           onChange={(e) => {
-                            const current = getMultiAnswers(question.answer);
+                            const current = getMultiAnswers(question.answer, question.options);
                             const next = e.target.checked
                               ? [...current, option]
                               : current.filter((item) => item !== option);
-                            updateQuestion(question.id, { answer: JSON.stringify(next) });
+                            updateQuestion(question.id, { answer: stringifyMultiSelectAnswers(next) });
                           }}
                         />
                         <span className="option-letter">{String.fromCharCode(65 + optIdx)}</span>
                       </label>
-                      <input
+                      <textarea
+                        className="option-text-input"
+                        rows={1}
                         value={option}
                         placeholder={`Lựa chọn ${String.fromCharCode(65 + optIdx)}…`}
                         onChange={(event) => {
@@ -505,11 +723,11 @@ export default function AdminPage() {
                           const nextOpts = question.options.map((item, index) =>
                             index === optIdx ? newVal : item
                           );
-                          const currentSelected = getMultiAnswers(question.answer);
+                          const currentSelected = getMultiAnswers(question.answer, question.options);
                           const nextSelected = currentSelected.map((item) => (item === oldVal ? newVal : item));
                           updateQuestion(question.id, {
                             options: nextOpts,
-                            answer: JSON.stringify(nextSelected),
+                            answer: stringifyMultiSelectAnswers(nextSelected),
                           });
                         }}
                       />
@@ -520,11 +738,11 @@ export default function AdminPage() {
                           title="Xóa lựa chọn này"
                           onClick={() => {
                             const nextOpts = question.options.filter((_, idx) => idx !== optIdx);
-                            const currentSelected = getMultiAnswers(question.answer);
+                            const currentSelected = getMultiAnswers(question.answer, question.options);
                             const nextSelected = currentSelected.filter((item) => item !== option);
                             updateQuestion(question.id, {
                               options: nextOpts,
-                              answer: JSON.stringify(nextSelected),
+                              answer: stringifyMultiSelectAnswers(nextSelected),
                             });
                           }}
                         >
@@ -699,10 +917,12 @@ export default function AdminPage() {
             </div>
           </div>
 
-          <Button className="open-game" asChild>
-            <Link href={playPath}>
-              Vào phòng chơi này <ExternalLink size={16} />
-            </Link>
+          <Button
+            className="open-game"
+            disabled={isCheckingPlay}
+            onClick={() => void handleEnterPlay()}
+          >
+            {isCheckingPlay ? "Đang kiểm tra…" : "Vào phòng chơi này"} <ExternalLink size={16} />
           </Button>
           <Button
             variant="ghost"
@@ -871,11 +1091,54 @@ export default function AdminPage() {
               <span>03</span>
               <div>
                 <h2>Danh sách câu hỏi thi công & Lật tranh</h2>
-                <p>Nhập câu hỏi để lật mở từng mảnh ghép của bức tranh bí mật (tối thiểu 4 câu hỏi chính để tạo lưới vuông).</p>
+                <p>Mỗi câu chính là một ô. Câu phụ gắn ngay dưới câu đó: sai thì lấy ngẫu nhiên câu phụ còn lại; hết câu phụ thì khóa ô.</p>
               </div>
               <div className="auto-grid-badge">
                 Lưới vuông <b>{automaticGrid.rows}×{automaticGrid.cols}</b> ({allMainQuestions.length} câu chính)
               </div>
+            </div>
+
+            {/* CSV Import Toolbar */}
+            <div style={{
+              display: "flex", alignItems: "center", flexWrap: "wrap", gap: 10,
+              padding: "12px 16px", background: "#f0f9f4", border: "1px solid #a7f3d0",
+              borderRadius: 12, marginBottom: 20,
+            }}>
+              <FileUp size={18} style={{ color: "#059669", flexShrink: 0 }} />
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <span style={{ fontWeight: 700, color: "#065f46", fontSize: "0.84rem" }}>
+                  Import câu hỏi từ File CSV
+                </span>
+                <span style={{ color: "#6b7280", fontSize: "0.76rem", marginLeft: 8 }}>
+                  Cột: type, question, option_a..d, answer, is_backup, parent_index. Câu phụ: is_backup=1 và parent_index = số thứ tự câu chính (1, 2, 3…). Câu chọn nhiều: answer viết 1930|1945.
+                </span>
+              </div>
+              <div style={{ display: "flex", gap: 8, flexShrink: 0 }}>
+                <Button
+                  type="button" variant="outline" size="sm"
+                  onClick={downloadCsvTemplate}
+                  style={{ borderColor: "#059669", color: "#065f46", fontSize: "0.78rem" }}
+                >
+                  <Download size={13} /> Tải mẫu CSV
+                </Button>
+                <Button
+                  type="button" size="sm"
+                  onClick={() => csvInputRef.current?.click()}
+                  style={{ background: "#059669", color: "#fff", fontSize: "0.78rem" }}
+                >
+                  <FileUp size={13} /> Chọn file CSV để import
+                </Button>
+                <input
+                  ref={csvInputRef} type="file" accept=".csv,text/csv"
+                  style={{ display: "none" }}
+                  onChange={(e) => { const f = e.target.files?.[0]; if (f) importCsvQuestions(f); e.target.value = ""; }}
+                />
+              </div>
+              {csvError && (
+                <div style={{ width: "100%", padding: "6px 10px", background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 8, color: "#b91c1c", fontSize: "0.78rem", fontWeight: 600, wordBreak: "break-word" }}>
+                  ⚠️ {csvError}
+                </div>
+              )}
             </div>
 
             {/* Khối câu hỏi chính */}
@@ -914,55 +1177,111 @@ export default function AdminPage() {
                   </Button>
                 </div>
               ) : (
-                allMainQuestions.map((question, questionIndex) =>
-                  renderQuestionEditor(question, questionIndex, false)
-                )
+                allMainQuestions.map((question, questionIndex) => {
+                  const backups = getBackupsForParent(allQuestions, question.id);
+                  return (
+                    <div className="main-question-block" key={question.id}>
+                      {renderQuestionEditor(question, questionIndex, false)}
+                      <div className="backup-nest">
+                        <div className="backup-nest-head">
+                          <span>Câu hỏi phụ của ô #{questionIndex + 1} ({backups.length} câu)</span>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={() => addQuestion(true, question.id)}
+                            style={{ borderColor: "#d97706", color: "#854d0e", fontWeight: 700 }}
+                          >
+                            <Plus size={13} /> Thêm câu phụ
+                          </Button>
+                        </div>
+                        {backups.length === 0 ? (
+                          <p className="backup-nest-empty">
+                            Chưa có câu phụ. Nếu trả lời sai ô này và không còn câu phụ thì ô sẽ bị khóa hẳn.
+                          </p>
+                        ) : (
+                          backups.map((backup, backupIndex) =>
+                            renderQuestionEditor(backup, backupIndex, true, questionIndex + 1)
+                          )
+                        )}
+                      </div>
+                    </div>
+                  );
+                })
               )}
             </div>
 
-            {/* Khối câu hỏi dự bị */}
+            {unassignedBackups.length > 0 && (
             <div style={{ marginTop: 24, paddingTop: 20, borderTop: "2px dashed #ded4c2" }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
-                <div>
-                  <h3 style={{ margin: 0, fontSize: "1.05rem", color: "#854d0e", fontWeight: 800 }}>
-                    2. Kho câu hỏi dự bị (Dùng khi người chơi trả lời sai)
-                  </h3>
-                  <small style={{ color: "#748079" }}>
-                    Khi trả lời sai một ô, câu hỏi dự bị sẽ tự động được bốc cho lần thử tiếp theo (Hiện có: {allBackupQuestions.length} câu).
-                  </small>
-                </div>
-                <Button variant="outline" onClick={() => addQuestion(true)} style={{ borderColor: "#d97706", color: "#854d0e", fontWeight: 700 }}>
-                  <Plus size={15} /> Thêm câu dự bị
-                </Button>
+              <div style={{ marginBottom: 14 }}>
+                <h3 style={{ margin: 0, fontSize: "1.05rem", color: "#854d0e", fontWeight: 800 }}>
+                  Câu phụ chưa gắn câu chính ({unassignedBackups.length})
+                </h3>
+                <small style={{ color: "#748079" }}>
+                  Các câu cũ trong kho chung. Hãy gắn vào đúng ô câu hỏi chính.
+                </small>
               </div>
-
-              {allBackupQuestions.length === 0 ? (
-                <div
-                  style={{
-                    padding: "24px 16px",
-                    textAlign: "center",
-                    background: "#fffbf2",
-                    borderRadius: 12,
-                    border: "1px dashed #e4caa0",
-                    margin: "10px 0",
-                  }}
-                >
-                  <p style={{ margin: "0 0 10px", color: "#854d0e", fontSize: "0.82rem" }}>
-                    Chưa có câu hỏi dự bị. Nếu không có câu dự bị, hệ thống sẽ dùng lại câu hỏi chính khi người chơi bấm lại vào ô đó.
-                  </p>
-                  <Button variant="ghost" onClick={() => addQuestion(true)} style={{ color: "#b45309" }}>
-                    <Plus size={14} /> Thêm câu hỏi dự bị
-                  </Button>
+              {unassignedBackups.map((question, questionIndex) => (
+                <div key={question.id}>
+                  {renderQuestionEditor(question, questionIndex, true, 0)}
+                  <label className="assign-backup-row">
+                    <span>Gắn vào câu chính</span>
+                    <select
+                      value=""
+                      onChange={(event) => {
+                        const parentId = event.target.value;
+                        if (parentId) updateQuestion(question.id, { parentQuestionId: parentId, isBackup: true });
+                      }}
+                    >
+                      <option value="">Chọn ô câu hỏi chính…</option>
+                      {allMainQuestions.map((main, index) => (
+                        <option key={main.id} value={main.id}>
+                          Ô #{index + 1}
+                          {main.question ? `: ${main.question.slice(0, 60)}` : ""}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
                 </div>
-              ) : (
-                allBackupQuestions.map((question, questionIndex) =>
-                  renderQuestionEditor(question, questionIndex, true)
-                )
-              )}
+              ))}
             </div>
+            )}
           </section>
         </section>
       </div>
+
+      <Dialog open={playChoiceOpen} onOpenChange={setPlayChoiceOpen}>
+        <DialogContent className="room-choice-dialog">
+          <DialogHeader>
+            <span className="dialog-kicker">TRẠNG THÁI TRẬN ĐẤU</span>
+            <DialogTitle>{session.config.sessionName}</DialogTitle>
+            <DialogDescription>
+              Phòng này đã có tiến độ (ô đã mở, mở lỗi, hoặc đã đoán bức tranh). Bạn muốn chơi tiếp hay chơi lại từ đầu?
+            </DialogDescription>
+          </DialogHeader>
+          <div className="room-choice-list">
+            <Button className="play-choice" onClick={handleContinuePlay}>
+              <span><Gamepad2 /></span>
+              <div>
+                <b>Tiếp tục thi công</b>
+                <small>Giữ nguyên các ô đã lật và chơi tiếp</small>
+              </div>
+            </Button>
+            <Button
+              variant="outline"
+              className="manage-choice"
+              disabled={isResettingPlay}
+              onClick={() => void handleResetAndPlay()}
+            >
+              <span><RotateCcw /></span>
+              <div>
+                <b>{isResettingPlay ? "Đang đặt lại…" : "Chơi lại từ đầu"}</b>
+                <small>Xóa tiến độ và bắt đầu trận mới</small>
+              </div>
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       <footer className="admin-savebar">
         <div>

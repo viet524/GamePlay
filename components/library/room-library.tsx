@@ -8,6 +8,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { COMMUNITY_PRESETS, createGridStatus } from "@/lib/mock-game";
 import { deleteRoom, listPublicRooms, loadSession, resetGameState, saveSession, uploadAsset } from "@/lib/game-service";
 import type { GameSession, RoomSummary } from "@/lib/game-types";
+import { hasGameProgress } from "@/lib/game-types";
 
 export function RoomLibrary() {
   const [rooms, setRooms] = useState<RoomSummary[]>(COMMUNITY_PRESETS);
@@ -82,9 +83,28 @@ export function RoomLibrary() {
     }
   };
 
-  const handleStartPlay = (room: RoomSummary) => {
-    setSelectedRoom(null);
-    setPlayChoiceRoom(room);
+  // Tr\u1ea1ng th\u00e1i loading khi ki\u1ec3m tra ti\u1ebfn tr\u00ecnh ph\u00f2ng
+  const [isCheckingPlay, setIsCheckingPlay] = useState(false);
+
+  const handleStartPlay = async (room: RoomSummary) => {
+    setIsCheckingPlay(true);
+    try {
+      const loaded = await loadSession(room.sessionId);
+      const hasProgress = hasGameProgress(loaded.state);
+
+      setSelectedRoom(null);
+      if (!hasProgress) {
+        window.location.href = `/play/${room.sessionId}`;
+        return;
+      }
+
+      setPlayChoiceRoom(room);
+    } catch {
+      setSelectedRoom(null);
+      window.location.href = `/play/${room.sessionId}`;
+    } finally {
+      setIsCheckingPlay(false);
+    }
   };
 
   const handleContinuePlay = () => {
@@ -263,11 +283,11 @@ export function RoomLibrary() {
             <DialogDescription>Chọn cách bạn muốn sử dụng phòng này.</DialogDescription>
           </DialogHeader>
           <div className="room-choice-list">
-            <Button className="play-choice" onClick={() => selectedRoom && handleStartPlay(selectedRoom)}>
+            <Button className="play-choice" disabled={isCheckingPlay} onClick={() => selectedRoom && void handleStartPlay(selectedRoom)}>
               <span><Gamepad2 /></span>
               <div>
                 <b>Chơi game</b>
-                <small>Mở màn hình thi công lật mở bức tranh</small>
+                <small>{isCheckingPlay ? "Đang kiểm tra tiến trình…" : "Mở màn hình thi công lật mở bức tranh"}</small>
               </div>
             </Button>
             <Button

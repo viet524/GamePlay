@@ -201,6 +201,7 @@ export function createGridStatus(rows: number, cols: number): GridCellStatus[] {
     cellId: `${Math.floor(index / cols)}_${index % cols}`,
     status: "empty",
     builtBy: null,
+    usedBackupIds: [],
   }));
 }
 
