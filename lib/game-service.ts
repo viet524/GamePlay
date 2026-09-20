@@ -1,6 +1,6 @@
 import { createClient, type RealtimeChannel, type SupabaseClient } from "@supabase/supabase-js";
 import { DEFAULT_BG_MUSIC_URL, createDemoSession, createGridStatus, getAutomaticGrid } from "./mock-game";
-import type { GameSession, GameState, RoomSummary, StageConfig } from "./game-types";
+import { canEnterFinale, type GameSession, type GameState, type RoomSummary, type StageConfig } from "./game-types";
 
 const LOCAL_PREFIX = "xay-nha-dang:";
 const CHANNEL_NAME = "xay-nha-dang-sync";
@@ -51,7 +51,11 @@ function normalizeSessionGrid(session: GameSession): GameSession {
   return {
     ...session,
     config: { ...session.config, gridRows: rows, gridCols: cols },
-    state: { ...session.state, gridStatus: nextGrid, completed: nextGrid.every((cell) => cell.status === "built") },
+    state: {
+      ...session.state,
+      gridStatus: nextGrid,
+      completed: canEnterFinale({ ...session.state, gridStatus: nextGrid }),
+    },
   };
 }
 

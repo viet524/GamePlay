@@ -15,6 +15,7 @@ import {
   RotateCcw,
   Settings,
   Sparkles,
+  Eye,
   Trophy,
   Upload,
   Users,
@@ -35,6 +36,7 @@ import {
 import { DEFAULT_BG_MUSIC_URL, cellStage } from "@/lib/mock-game";
 import { applyMusicToAllRooms, isSupabaseConfigured, loadSession, resetGameState, saveGameState, subscribeToGameState, uploadAsset } from "@/lib/game-service";
 import type { GameSession, GameState, GridCellStatus, Question, TeamMember } from "@/lib/game-types";
+import { canEnterFinale, isBoardExhausted } from "@/lib/game-types";
 import { normalizeAnswerText, parseMultiSelectAnswers, getMainQuestions, getBackupsForParent, pickUnusedBackup } from "@/lib/question-answers";
 
 type Point = { x: number; y: number };
@@ -110,6 +112,8 @@ export function GameExperience({ sessionId }: { sessionId: string }) {
   const [guessedName, setGuessedName] = useState("");
   const [guessFeedback, setGuessFeedback] = useState<{ kind: "success" | "error"; message: string } | null>(null);
   const [showFireworks, setShowFireworks] = useState(false);
+  const [peekingAtBoard, setPeekingAtBoard] = useState(false);
+  const peekingAtBoardRef = useRef(false);
 
   // Nhạc nền (mặc định âm lượng 0.2 để luôn êm ái ở dưới nền)
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -177,6 +181,13 @@ export function GameExperience({ sessionId }: { sessionId: string }) {
     }, 1200);
     return () => window.clearTimeout(timer);
   }, [session?.state.completed, sessionId]);
+
+  useEffect(() => {
+    if (!session || session.state.completed || isSaving || questionOpen || peekingAtBoard) return;
+    if (isBoardExhausted(session.state.gridStatus) && !hasGuessedCorrectly) {
+      setGuessPictureOpen(true);
+    }
+  }, [session, hasGuessedCorrectly, isSaving, questionOpen, peekingAtBoard]);
 
   const getHomePosition = useCallback((): Point => {
     const stage = stageRef.current;
@@ -423,6 +434,8 @@ export function GameExperience({ sessionId }: { sessionId: string }) {
       setQuestionOpen(false);
       setSymbolicOpen(false);
       setGuessPictureOpen(false);
+      setPeekingAtBoard(false);
+      peekingAtBoardRef.current = false;
       setResetConfirmOpen(false);
       setResult({
         kind: "success",
@@ -443,6 +456,14 @@ export function GameExperience({ sessionId }: { sessionId: string }) {
   // Xử lý khi người chơi bấm trực tiếp vào một ô bất kỳ trên lưới
   const handleCellClick = async (clickedIndex: number) => {
     if (!session || isSaving || session.state.completed) return;
+    if (isBoardExhausted(session.state.gridStatus) && !session.state.hasGuessedCorrectly) {
+      peekingAtBoardRef.current = false;
+      setPeekingAtBoard(false);
+      setGuessFeedback(null);
+      setGuessInput("");
+      setGuessPictureOpen(true);
+      return;
+    }
     const { state, config } = session;
     const targetCell = state.gridStatus[clickedIndex];
     if (!targetCell) return;
@@ -492,15 +513,22 @@ export function GameExperience({ sessionId }: { sessionId: string }) {
         const nextState: GameState = {
           ...state,
           gridStatus: nextGrid,
+          completed: canEnterFinale({ ...state, gridStatus: nextGrid }),
           updatedAt: new Date().toISOString(),
         };
         setSession({ ...session, state: nextState });
         try { await saveGameState(nextState); } catch { /* nonfatal */ }
-        setResult({
-          kind: "error",
-          title: "Ô này đã bị khóa!",
-          body: "Không còn câu hỏi phụ cho mảnh ghép này.",
-        });
+        if (isBoardExhausted(nextGrid) && !state.hasGuessedCorrectly) {
+          setGuessFeedback(null);
+          setGuessInput("");
+          setGuessPictureOpen(true);
+        } else {
+          setResult({
+            kind: "error",
+            title: "Ô này đã bị khóa!",
+            body: "Không còn câu hỏi phụ cho mảnh ghép này.",
+          });
+        }
         return;
       }
     } else if (mainQuestion) {
@@ -612,12 +640,13 @@ export function GameExperience({ sessionId }: { sessionId: string }) {
         : cell
     );
 
-    const completed = correct && nextGrid.every((cell) => cell.status === "built");
-
     const nextState: GameState = {
       ...session.state,
       gridStatus: nextGrid,
-      completed,
+      completed: canEnterFinale({
+        ...session.state,
+        gridStatus: nextGrid,
+      }),
       updatedAt: new Date().toISOString(),
     };
 
@@ -644,6 +673,12 @@ export function GameExperience({ sessionId }: { sessionId: string }) {
     setSelectedQuestion(null);
     setQuizState("answering");
     setIsCorrectResult(null);
+
+    if (isBoardExhausted(nextGrid) && !session.state.hasGuessedCorrectly) {
+      setGuessFeedback(null);
+      setGuessInput("");
+      setGuessPictureOpen(true);
+    }
   };
 
   // Cơ chế Đoán Bức tranh bí mật riêng biệt (thông báo đúng/sai và vẫn cho chơi tiếp bình thường)
@@ -663,15 +698,18 @@ export function GameExperience({ sessionId }: { sessionId: string }) {
       setHasGuessedCorrectly(true);
       setGuessedName(targetName);
       setShowFireworks(true);
+      const exhausted = isBoardExhausted(session.state.gridStatus);
       setGuessFeedback({
         kind: "success",
-        message: `🎉 CHÍNH XÁC! Bạn đã đoán đúng bức tranh bí mật: "${targetName}"! Bạn có thể tiếp tục lật mở các ô còn lại để hoàn thành 100% công trình!`,
+        message: exhausted
+          ? `🎉 CHÍNH XÁC! Bức tranh bí mật là "${targetName}". Đang chuyển tới màn hình hoàn thành…`
+          : `🎉 CHÍNH XÁC! Bạn đã đoán đúng bức tranh bí mật: "${targetName}"! Bạn có thể tiếp tục lật mở các ô còn lại để hoàn thành 100% công trình!`,
       });
-      // Persist to GameState
       const nextState: GameState = {
         ...session.state,
         hasGuessedCorrectly: true,
         guessedName: targetName,
+        completed: exhausted,
         updatedAt: new Date().toISOString(),
       };
       setSession({ ...session, state: nextState });
@@ -705,6 +743,8 @@ export function GameExperience({ sessionId }: { sessionId: string }) {
   const { config, members, state } = session;
   const totalBuilt = state.gridStatus.filter((cell) => cell.status === "built").length;
   const progress = Math.round((totalBuilt / state.gridStatus.length) * 100);
+  const boardExhausted = isBoardExhausted(state.gridStatus);
+  const mustGuessToFinish = boardExhausted && !hasGuessedCorrectly && !state.completed;
   const initials = (activeMember?.name ?? "Kỹ sư")
     .split(" ")
     .slice(-2)
@@ -785,10 +825,8 @@ export function GameExperience({ sessionId }: { sessionId: string }) {
             href="/"
             className="exit-home-btn"
             title="Thoát ra màn hình chính"
-            onClick={(e) => {
-              e.preventDefault();
+            onClick={() => {
               audioRef.current?.pause();
-              window.location.href = "/";
             }}
           >
             <Home size={15} />
@@ -943,6 +981,8 @@ export function GameExperience({ sessionId }: { sessionId: string }) {
                 ? phase === "hammering"
                   ? "Đang thi công gõ búa…"
                   : "Kỹ sư đang di chuyển…"
+                : mustGuessToFinish
+                ? "Đã hết câu hỏi có thể trả lời. Hãy đoán đúng tên bức tranh để sang màn hình hoàn thành!"
                 : "👉 Nhấp trực tiếp vào bất kỳ ô nào chưa mở để trả lời câu hỏi và lật mở mảnh ghép!"}
             </div>
           </div>
@@ -1019,10 +1059,18 @@ export function GameExperience({ sessionId }: { sessionId: string }) {
           <div className="action-stack">
             <Button
               className="primary-action"
-              onClick={triggerNextQuestion}
-              disabled={isSaving || state.completed || suggestedTargetIndex < 0}
+              onClick={() => {
+                if (mustGuessToFinish) {
+                  setGuessFeedback(null);
+                  setGuessInput("");
+                  setGuessPictureOpen(true);
+                  return;
+                }
+                triggerNextQuestion();
+              }}
+              disabled={isSaving || state.completed || (suggestedTargetIndex < 0 && !mustGuessToFinish)}
             >
-              Ô tiếp theo <ArrowRight size={17} />
+              {mustGuessToFinish ? "Đoán bức tranh để hoàn thành" : <>Ô tiếp theo <ArrowRight size={17} /></>}
             </Button>
             <Button
               className="guess-action"
@@ -1057,7 +1105,9 @@ export function GameExperience({ sessionId }: { sessionId: string }) {
           <div className="phase-note">
             <span>QUY TẮC THI CÔNG</span>
             <p>
-              Chọn bất kỳ ô nào chưa mở để trả lời câu hỏi và hé lộ từng mảnh ghép. Nếu bạn đã nhận ra bức tranh lịch sử bí mật phía sau, hãy bấm nút <b>Đoán bức tranh bí mật</b> để thử tài nhé!
+              {mustGuessToFinish
+                ? "Bạn đã hết câu hỏi có thể trả lời (ô đã mở hết hoặc phần còn lại đã bị khóa). Hãy đoán đúng tên bức tranh bí mật để sang màn hình hoàn thành."
+                : "Chọn bất kỳ ô nào chưa mở để trả lời câu hỏi và hé lộ từng mảnh ghép. Nếu bạn đã nhận ra bức tranh lịch sử bí mật phía sau, hãy bấm nút Đoán bức tranh bí mật để thử tài nhé!"}
             </p>
           </div>
         </aside>
@@ -1295,19 +1345,42 @@ export function GameExperience({ sessionId }: { sessionId: string }) {
         </DialogContent>
       </Dialog>
 
-      {/* Dialog Đoán Bức Tranh Bí Mật riêng biệt (không kết thúc ván chơi) */}
-      <Dialog open={guessPictureOpen} onOpenChange={setGuessPictureOpen}>
-        <DialogContent className="game-dialog sm:max-w-md">
+      {/* Dialog Đoán Bức Tranh Bí Mật: bắt buộc khi hết câu hỏi, không kết thúc ván nếu vẫn còn ô chơi */}
+      <Dialog
+        open={guessPictureOpen}
+        onOpenChange={(open) => {
+          if (!open && mustGuessToFinish && !hasGuessedCorrectly && !peekingAtBoardRef.current) return;
+          setGuessPictureOpen(open);
+        }}
+      >
+        <DialogContent
+          className="game-dialog sm:max-w-md"
+          showCloseButton={!mustGuessToFinish || hasGuessedCorrectly}
+          onPointerDownOutside={(event) => {
+            if (mustGuessToFinish && !hasGuessedCorrectly) event.preventDefault();
+          }}
+          onEscapeKeyDown={(event) => {
+            if (mustGuessToFinish && !hasGuessedCorrectly) event.preventDefault();
+          }}
+        >
           <DialogHeader>
             <span className="dialog-kicker" style={{ color: hasGuessedCorrectly ? "#166534" : "#d97706" }}>
-              {hasGuessedCorrectly ? "🏆 ĐÃ ĐOÁN ĐÚNG BỨC TRANH!" : "ĐOÁN BỨC TRANH BÍ MẬT"}
+              {hasGuessedCorrectly
+                ? "🏆 ĐÃ ĐOÁN ĐÚNG BỨC TRANH!"
+                : mustGuessToFinish
+                ? "ĐOÁN TRANH ĐỂ HOÀN THÀNH"
+                : "ĐOÁN BỨC TRANH BÍ MẬT"}
             </span>
             <DialogTitle>
-              {hasGuessedCorrectly ? `"${guessedName}"` : "Bạn đã nhận ra bức tranh?"}
+              {hasGuessedCorrectly ? `"${guessedName}"` : mustGuessToFinish ? "Không còn câu hỏi nào nữa" : "Bạn đã nhận ra bức tranh?"}
             </DialogTitle>
             <DialogDescription>
               {hasGuessedCorrectly
-                ? "Chúc mừng! Bạn đã đoán chính xác bức tranh bí mật trong phiên chơi này. Hãy tiếp tục mở các ô còn lại để hoàn thiện 100% công trình!"
+                ? boardExhausted
+                  ? "Chúc mừng! Bạn đã đoán chính xác. Đang chuyển tới màn hình hoàn thành…"
+                  : "Chúc mừng! Bạn đã đoán chính xác bức tranh bí mật trong phiên chơi này. Hãy tiếp tục mở các ô còn lại để hoàn thiện 100% công trình!"
+                : mustGuessToFinish
+                ? "Bạn đã mở hết các ô có thể mở, hoặc phần còn lại đã bị khóa vì hết câu phụ. Hãy nhập đúng tên bức tranh bí mật để sang màn hình cuối."
                 : "Nếu bạn đã đoán ra tên công trình hoặc sự kiện lịch sử ẩn giấu sau các mảnh ghép, hãy nhập dự đoán bên dưới!"}
             </DialogDescription>
           </DialogHeader>
@@ -1365,22 +1438,37 @@ export function GameExperience({ sessionId }: { sessionId: string }) {
                 </div>
               )}
 
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => {
+                  peekingAtBoardRef.current = true;
+                  setPeekingAtBoard(true);
+                  setGuessPictureOpen(false);
+                }}
+                style={{ width: "100%", fontWeight: 700 }}
+              >
+                <Eye size={15} /> Xem lại bức tranh
+              </Button>
+
               <DialogFooter style={{ marginTop: 8 }}>
-                <Button type="button" variant="outline" onClick={() => setGuessPictureOpen(false)}>
-                  Để sau
-                </Button>
+                {!mustGuessToFinish && (
+                  <Button type="button" variant="outline" onClick={() => setGuessPictureOpen(false)}>
+                    Để sau
+                  </Button>
+                )}
                 <Button
                   type="submit"
                   disabled={!guessInput.trim()}
-                  style={{ background: "#b45309", color: "#fff", fontWeight: 700 }}
+                  style={{ background: "#b45309", color: "#fff", fontWeight: 700, width: mustGuessToFinish ? "100%" : undefined }}
                 >
-                  <Sparkles size={15} /> Xác nhận đoán
+                  <Sparkles size={15} /> {mustGuessToFinish ? "Đoán để hoàn thành" : "Xác nhận đoán"}
                 </Button>
               </DialogFooter>
             </form>
           )}
 
-          {hasGuessedCorrectly && (
+          {hasGuessedCorrectly && !boardExhausted && (
             <DialogFooter style={{ marginTop: 16 }}>
               <Button
                 onClick={() => setGuessPictureOpen(false)}
@@ -1533,6 +1621,23 @@ export function GameExperience({ sessionId }: { sessionId: string }) {
           </div>
         </DialogContent>
       </Dialog>
+
+      {peekingAtBoard && !guessPictureOpen && (
+        <div className="board-peek-bar">
+          <p>Ô đã mở vẫn hiện, ô khóa vẫn khóa. Quan sát xong hãy quay lại đoán tranh.</p>
+          <Button
+            type="button"
+            onClick={() => {
+              peekingAtBoardRef.current = false;
+              setPeekingAtBoard(false);
+              setGuessPictureOpen(true);
+            }}
+            style={{ background: "#b45309", color: "#fff", fontWeight: 700 }}
+          >
+            <Sparkles size={15} /> Tiếp tục đoán tranh
+          </Button>
+        </div>
+      )}
     </main>
   );
 }

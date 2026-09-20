@@ -85,3 +85,20 @@ export function hasGameProgress(state: GameState | null | undefined): boolean {
     )
   );
 }
+
+/** Còn ô empty/failed thì vẫn còn câu hỏi có thể trả lời. */
+export function hasAnswerableCells(grid: GridCellStatus[] | null | undefined): boolean {
+  return (grid ?? []).some((cell) => cell.status === "empty" || cell.status === "failed");
+}
+
+/** Hết câu hỏi: mọi ô đã mở hoặc đã khóa (không còn câu phụ). */
+export function isBoardExhausted(grid: GridCellStatus[] | null | undefined): boolean {
+  const cells = grid ?? [];
+  return cells.length > 0 && !hasAnswerableCells(cells);
+}
+
+/** Sang màn cuối chỉ khi hết câu hỏi và đã đoán đúng bức tranh. */
+export function canEnterFinale(state: GameState | null | undefined): boolean {
+  if (!state) return false;
+  return isBoardExhausted(state.gridStatus) && Boolean(state.hasGuessedCorrectly);
+}

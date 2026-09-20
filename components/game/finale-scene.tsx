@@ -8,6 +8,7 @@ import { ArrowLeft, Home, RotateCcw, Sparkles, Volume2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { loadSession, resetGameState } from "@/lib/game-service";
 import type { GameSession } from "@/lib/game-types";
+import { canEnterFinale } from "@/lib/game-types";
 
 function playFanfare() {
   try {
@@ -70,7 +71,7 @@ export function FinaleScene({ sessionId }: { sessionId: string }) {
   }, [sessionId]);
 
   useEffect(() => {
-    if (!session?.state.completed) return;
+    if (!session || !canEnterFinale(session.state)) return;
     const stopFireworks = launchFireworks();
     playFanfare();
     const messageTimer = window.setTimeout(() => setShowMessage(true), 1200);
@@ -78,7 +79,7 @@ export function FinaleScene({ sessionId }: { sessionId: string }) {
       stopFireworks();
       window.clearTimeout(messageTimer);
     };
-  }, [session?.state.completed]);
+  }, [session]);
 
   const handleReset = async () => {
     if (!session) return;
@@ -101,12 +102,14 @@ export function FinaleScene({ sessionId }: { sessionId: string }) {
       </main>
     );
 
-  if (!session.state.completed)
+  if (!canEnterFinale(session.state))
     return (
       <main className="finale-locked">
         <Sparkles size={42} style={{ color: "#d97706" }} />
         <h1>Bức tranh chưa hoàn thành</h1>
-        <p>Hãy hoàn tất trả lời các ô câu hỏi trước khi chiêm ngưỡng bức tranh trọn vẹn.</p>
+        <p>
+          Khi không còn câu hỏi nào để trả lời, hãy đoán đúng bức tranh bí mật rồi mới mở màn hình hoàn thành.
+        </p>
         <Button asChild>
           <Link href={`/play/${sessionId}`}>
             <ArrowLeft /> Trở lại thi công
@@ -117,6 +120,9 @@ export function FinaleScene({ sessionId }: { sessionId: string }) {
 
   return (
     <main className="finale-shell">
+      <a href="/" className="btn-home finale-home-bar">
+        <Home size={16} /> Về trang chủ
+      </a>
       <div className="finale-rays" aria-hidden="true" />
       <div className="finale-stars" aria-hidden="true">★</div>
 
@@ -161,15 +167,9 @@ export function FinaleScene({ sessionId }: { sessionId: string }) {
               >
                 <RotateCcw size={16} /> {isResetting ? "Đang đặt lại…" : "Chơi lại từ đầu"}
               </Button>
-              <Button
-                variant="outline"
-                className="btn-home"
-                onClick={() => {
-                  window.location.href = "/";
-                }}
-              >
-                <Home size={16} /> Về thư viện phòng
-              </Button>
+              <a href="/" className="btn-home">
+                <Home size={16} /> Về trang chủ
+              </a>
             </div>
           </div>
         </div>
