@@ -2,7 +2,6 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { BookOpen, Gamepad2, Home, Library, Plus, RotateCcw, Search, Settings, Trash2, Upload, Users } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -11,7 +10,6 @@ import { deleteRoom, listPublicRooms, loadSession, resetGameState, saveSession, 
 import type { GameSession, RoomSummary } from "@/lib/game-types";
 
 export function RoomLibrary() {
-  const router = useRouter();
   const [rooms, setRooms] = useState<RoomSummary[]>(COMMUNITY_PRESETS);
   const [query, setQuery] = useState("");
   const [selectedRoom, setSelectedRoom] = useState<RoomSummary | null>(null);
@@ -93,7 +91,7 @@ export function RoomLibrary() {
     if (!playChoiceRoom) return;
     const sid = playChoiceRoom.sessionId;
     setPlayChoiceRoom(null);
-    router.push(`/play/${sid}`);
+    window.location.href = `/play/${sid}`;
   };
 
   const handleResetAndPlay = async () => {
@@ -104,9 +102,9 @@ export function RoomLibrary() {
       await resetGameState(session);
       const sid = playChoiceRoom.sessionId;
       setPlayChoiceRoom(null);
-      router.push(`/play/${sid}`);
+      window.location.href = `/play/${sid}`;
     } catch {
-      router.push(`/play/${playChoiceRoom.sessionId}`);
+      window.location.href = `/play/${playChoiceRoom.sessionId}`;
     } finally {
       setIsResetting(false);
     }
@@ -168,7 +166,7 @@ export function RoomLibrary() {
       await saveSession(newSession);
 
       setIsCreateOpen(false);
-      router.push(`/admin?session=${newSessionId}`);
+      window.location.href = `/admin?session=${newSessionId}`;
     } catch (err) {
       setCreateError(err instanceof Error ? err.message : "Có lỗi khi tạo phòng. Vui lòng thử lại!");
       setIsCreating(false);
@@ -272,14 +270,18 @@ export function RoomLibrary() {
                 <small>Mở màn hình thi công lật mở bức tranh</small>
               </div>
             </Button>
-            <Button asChild variant="outline" className="manage-choice">
-              <Link href={`/admin?session=${selectedRoom?.sessionId}`}>
-                <span><Settings /></span>
-                <div>
-                  <b>Quản lý phòng</b>
-                  <small>Chỉnh câu hỏi, tên công trình & thông điệp</small>
-                </div>
-              </Link>
+            <Button
+              variant="outline"
+              className="manage-choice"
+              onClick={() => {
+                if (selectedRoom) window.location.href = `/admin?session=${selectedRoom.sessionId}`;
+              }}
+            >
+              <span><Settings /></span>
+              <div>
+                <b>Quản lý phòng</b>
+                <small>Chỉnh câu hỏi, tên công trình & thông điệp</small>
+              </div>
             </Button>
           </div>
           <div style={{ marginTop: 12, display: "flex", justifyContent: "flex-end" }}>
@@ -472,4 +474,3 @@ export function RoomLibrary() {
     </main>
   );
 }
-

@@ -468,6 +468,8 @@ button { font: inherit; }
   text-decoration: none;
   transition: all 0.2s ease;
   white-space: nowrap;
+  cursor: pointer;
+  font-family: inherit;
 }
 .admin-link:hover {
   background: #ffd977;
@@ -847,4 +849,3 @@ button { font: inherit; }
   padding: 0 18px;
   border-radius: 12px;
 }
-

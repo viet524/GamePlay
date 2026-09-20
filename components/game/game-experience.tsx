@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import {
   ArrowRight,
   Check,
@@ -80,7 +79,6 @@ function playSound(kind: "steps" | "hammer" | "success" | "crack" | "fanfare") {
 }
 
 export function GameExperience({ sessionId }: { sessionId: string }) {
-  const router = useRouter();
   const [session, setSession] = useState<GameSession | null>(null);
   const [position, setPosition] = useState<Point>({ x: 0, y: 0 });
   const [duration, setDuration] = useState(900);
@@ -161,9 +159,11 @@ export function GameExperience({ sessionId }: { sessionId: string }) {
   useEffect(() => {
     if (!session?.state.completed) return;
     playSound("fanfare");
-    const timer = window.setTimeout(() => router.push(`/play/${sessionId}/climax`), 1200);
+    const timer = window.setTimeout(() => {
+      window.location.href = `/play/${sessionId}/climax`;
+    }, 1200);
     return () => window.clearTimeout(timer);
-  }, [router, session?.state.completed, sessionId]);
+  }, [session?.state.completed, sessionId]);
 
   const getHomePosition = useCallback((): Point => {
     const stage = stageRef.current;
@@ -638,9 +638,13 @@ export function GameExperience({ sessionId }: { sessionId: string }) {
           <span className="session-pill">
             <span /> {isSupabaseConfigured() ? "Supabase Cloud Realtime" : "Local Realtime"}
           </span>
-          <Link href={`/admin?session=${config.sessionId}`} className="admin-link">
+          <button
+            type="button"
+            className="admin-link"
+            onClick={() => { window.location.href = `/admin?session=${config.sessionId}`; }}
+          >
             <Settings size={15} /> Quản trị
-          </Link>
+          </button>
         </div>
       </header>
 
