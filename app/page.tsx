@@ -1,5 +1,5 @@
-import { GameExperience } from "@/components/game/game-experience";
+import { RoomLibrary } from "@/components/library/room-library";
 
 export default function Home() {
-  return <GameExperience sessionId="00000000-0000-4000-8000-000000000002" />;
+  return <RoomLibrary />;
 }

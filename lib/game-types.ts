@@ -28,12 +28,23 @@ export interface TeamMember {
 export interface GameConfig {
   sessionId: string;
   sessionName: string;
+  authorName: string;
   buildingName: string;
   buildingImageUrl: string;
   gridRows: number;
   gridCols: number;
   quoteText: string;
   stagesData: StageConfig[];
+}
+
+export interface RoomSummary {
+  sessionId: string;
+  sessionName: string;
+  authorName: string;
+  buildingImageUrl: string;
+  questionCount: number;
+  memberCount: number;
+  updatedAt: string;
 }
 
 export interface GridCellStatus {
@@ -48,6 +59,9 @@ export interface GameState {
   gridStatus: GridCellStatus[];
   questionCursor: Record<string, number>;
   completed: boolean;
+  hasGuessedCorrectly?: boolean;
+  guessedName?: string;
+  bgMusicUrl?: string;
   updatedAt: string;
 }
 

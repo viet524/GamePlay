@@ -1,14 +1,16 @@
 import { createClient, type RealtimeChannel, type SupabaseClient } from "@supabase/supabase-js";
-import { createDemoSession, createGridStatus } from "./mock-game";
-import type { GameSession, GameState } from "./game-types";
+import { createDemoSession, createGridStatus, getAutomaticGrid } from "./mock-game";
+import type { GameSession, GameState, RoomSummary } from "./game-types";
 
 const LOCAL_PREFIX = "xay-nha-dang:";
 const CHANNEL_NAME = "xay-nha-dang-sync";
 
 function getSupabase(): SupabaseClient | null {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const rawUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-  return url && key ? createClient(url, key) : null;
+  if (!rawUrl || !key) return null;
+  const url = rawUrl.replace(/\/rest\/v1\/?$/, "").replace(/\/+$/, "");
+  return createClient(url, key);
 }
 
 export const isSupabaseConfigured = () => Boolean(getSupabase());
@@ -35,9 +37,27 @@ function writeLocal(session: GameSession) {
   channel.close();
 }
 
+function normalizeSessionGrid(session: GameSession): GameSession {
+  const { rows, cols } = getAutomaticGrid(session.config.stagesData);
+  if (session.config.gridRows === rows && session.config.gridCols === cols && session.state.gridStatus.length === rows * cols) return session;
+  const oldCols = Math.max(1, session.config.gridCols);
+  const oldGrid = session.state.gridStatus;
+  const nextGrid = createGridStatus(rows, cols).map((cell, index) => {
+    const row = Math.floor(index / cols);
+    const col = index % cols;
+    const source = oldGrid[row * oldCols + col];
+    return source ? { ...source, cellId: cell.cellId } : cell;
+  });
+  return {
+    ...session,
+    config: { ...session.config, gridRows: rows, gridCols: cols },
+    state: { ...session.state, gridStatus: nextGrid, completed: nextGrid.every((cell) => cell.status === "built") },
+  };
+}
+
 export async function loadSession(sessionId: string): Promise<GameSession> {
   const supabase = getSupabase();
-  if (!supabase) return readLocal(sessionId) ?? createDemoSession(sessionId);
+  if (!supabase) return normalizeSessionGrid(readLocal(sessionId) ?? createDemoSession(sessionId));
 
   const [{ data: config }, { data: members }, { data: state }] = await Promise.all([
     supabase.from("GameConfig").select("*").eq("session_id", sessionId).maybeSingle(),
@@ -45,15 +65,16 @@ export async function loadSession(sessionId: string): Promise<GameSession> {
     supabase.from("GameState").select("*").eq("session_id", sessionId).maybeSingle(),
   ]);
 
-  if (!config) return readLocal(sessionId) ?? createDemoSession(sessionId);
+  if (!config) return normalizeSessionGrid(readLocal(sessionId) ?? createDemoSession(sessionId));
   const rows = Number(config.grid_rows);
   const cols = Number(config.grid_cols);
-  return {
+  return normalizeSessionGrid({
     config: {
       sessionId,
       sessionName: config.session_name ?? "Phòng thi công",
-      buildingName: config.building_name ?? "Công trình bí mật",
-      buildingImageUrl: config.building_image_url || "/demo-building.svg",
+      authorName: config.author_name ?? "Người dùng cộng đồng",
+      buildingName: config.building_name ?? "Biểu tượng Ngôi Nhà Đảng Vững Mạnh",
+      buildingImageUrl: config.building_image_url || "/symbolic-party-house.jpg",
       gridRows: rows,
       gridCols: cols,
       quoteText: config.quote_text,
@@ -72,6 +93,9 @@ export async function loadSession(sessionId: string): Promise<GameSession> {
       gridStatus: state.grid_status,
       questionCursor: state.question_cursor ?? { "1": 0, "2": 0, "3": 0, "4": 0 },
       completed: Boolean(state.completed),
+      hasGuessedCorrectly: Boolean(state.has_guessed_correctly),
+      guessedName: state.guessed_name ?? undefined,
+      bgMusicUrl: state.bg_music_url ?? undefined,
       updatedAt: state.updated_at,
     } : {
       sessionId,
@@ -79,9 +103,12 @@ export async function loadSession(sessionId: string): Promise<GameSession> {
       gridStatus: createGridStatus(rows, cols),
       questionCursor: { "1": 0, "2": 0, "3": 0, "4": 0 },
       completed: false,
+      hasGuessedCorrectly: false,
+      guessedName: undefined,
+      bgMusicUrl: undefined,
       updatedAt: new Date().toISOString(),
     },
-  };
+  });
 }
 
 export async function saveSession(session: GameSession): Promise<void> {
@@ -92,6 +119,8 @@ export async function saveSession(session: GameSession): Promise<void> {
   const { error: configError } = await supabase.from("GameConfig").upsert({
     session_id: session.config.sessionId,
     session_name: session.config.sessionName,
+    author_name: session.config.authorName,
+    is_public: true,
     building_name: session.config.buildingName,
     building_image_url: session.config.buildingImageUrl,
     grid_rows: session.config.gridRows,
@@ -115,8 +144,79 @@ export async function saveSession(session: GameSession): Promise<void> {
   await saveGameState(session.state);
 }
 
+export async function listPublicRooms(): Promise<RoomSummary[]> {
+  const supabase = getSupabase();
+  if (supabase) {
+    try {
+      const [{ data, error }, { data: memberRows }] = await Promise.all([
+        supabase
+          .from("GameConfig")
+          .select("session_id,session_name,author_name,building_image_url,stages_data,updated_at")
+          .eq("is_public", true)
+          .order("updated_at", { ascending: false }),
+        supabase.from("TeamMembers").select("session_id"),
+      ]);
+
+      if (!error && data && data.length > 0) {
+        // Dọn dẹp các bản nháp local cũ nếu có
+        if (typeof window !== "undefined") {
+          const keysToRemove: string[] = [];
+          for (let index = 0; index < localStorage.length; index += 1) {
+            const key = localStorage.key(index);
+            if (key?.startsWith(LOCAL_PREFIX) && key.includes("00000000-0000-4000-8000")) {
+              keysToRemove.push(key);
+            }
+          }
+          keysToRemove.forEach((k) => localStorage.removeItem(k));
+        }
+
+        return data.map((room) => ({
+          sessionId: String(room.session_id),
+          sessionName: String(room.session_name ?? "Phòng cộng đồng"),
+          authorName: String(room.author_name ?? "Người dùng cộng đồng"),
+          buildingImageUrl: String(room.building_image_url || "/symbolic-party-house.jpg"),
+          questionCount: ((room.stages_data ?? []) as GameSession["config"]["stagesData"]).reduce(
+            (sum, stage) => sum + stage.questions.filter((question) => !question.isBackup).length,
+            0
+          ),
+          memberCount: (memberRows ?? []).filter((member) => member.session_id === room.session_id).length,
+          updatedAt: String(room.updated_at ?? new Date().toISOString()),
+        }));
+      }
+    } catch {
+      /* Fallback if Supabase query fails. */
+    }
+  }
+
+  const localRooms: RoomSummary[] = [];
+  if (typeof window !== "undefined") {
+    for (let index = 0; index < localStorage.length; index += 1) {
+      const key = localStorage.key(index);
+      if (!key?.startsWith(LOCAL_PREFIX)) continue;
+      try {
+        const room = JSON.parse(localStorage.getItem(key) ?? "") as GameSession;
+        localRooms.push({
+          sessionId: room.config.sessionId,
+          sessionName: room.config.sessionName,
+          authorName: room.config.authorName || "Bạn",
+          buildingImageUrl: room.config.buildingImageUrl || "/symbolic-party-house.jpg",
+          questionCount: room.config.stagesData.reduce((sum, stage) => sum + stage.questions.filter((question) => !question.isBackup).length, 0),
+          memberCount: room.members.length,
+          updatedAt: room.state.updatedAt,
+        });
+      } catch { /* Ignore invalid local drafts. */ }
+    }
+  }
+
+  return uniqueRooms(localRooms);
+}
+
+function uniqueRooms(rooms: RoomSummary[]) {
+  return [...new Map(rooms.map((room) => [room.sessionId, room])).values()];
+}
+
 export async function saveGameState(state: GameState): Promise<void> {
-  const stored = readLocal(state.sessionId) ?? createDemoSession(state.sessionId);
+  const stored = normalizeSessionGrid(readLocal(state.sessionId) ?? createDemoSession(state.sessionId));
   writeLocal({ ...stored, state });
   const supabase = getSupabase();
   if (!supabase) return;
@@ -126,6 +226,9 @@ export async function saveGameState(state: GameState): Promise<void> {
     grid_status: state.gridStatus,
     question_cursor: state.questionCursor,
     completed: state.completed,
+    has_guessed_correctly: state.hasGuessedCorrectly ?? false,
+    guessed_name: state.guessedName ?? null,
+    bg_music_url: state.bgMusicUrl ?? null,
     updated_at: state.updatedAt,
   });
   if (error) throw error;
@@ -148,6 +251,9 @@ export function subscribeToGameState(sessionId: string, onState: (state: GameSta
           gridStatus: row.grid_status as GameState["gridStatus"],
           questionCursor: row.question_cursor as Record<string, number>,
           completed: Boolean(row.completed),
+          hasGuessedCorrectly: Boolean(row.has_guessed_correctly),
+          guessedName: (row.guessed_name as string | null) ?? undefined,
+          bgMusicUrl: (row.bg_music_url as string | null) ?? undefined,
           updatedAt: String(row.updated_at),
         });
       },
@@ -183,3 +289,35 @@ function fileToDataUrl(file: File): Promise<string> {
     reader.readAsDataURL(file);
   });
 }
+
+export async function deleteRoom(sessionId: string): Promise<void> {
+  const supabase = getSupabase();
+  if (supabase) {
+    try {
+      await supabase.from("GameState").delete().eq("session_id", sessionId);
+      await supabase.from("TeamMembers").delete().eq("session_id", sessionId);
+      await supabase.from("GameConfig").delete().eq("session_id", sessionId);
+    } catch {
+      /* continue deleting local */
+    }
+  }
+  if (typeof window !== "undefined") {
+    localStorage.removeItem(`${LOCAL_PREFIX}${sessionId}`);
+  }
+}
+
+export async function resetGameState(session: GameSession): Promise<GameState> {
+  const newState: GameState = {
+    sessionId: session.config.sessionId,
+    currentStage: 1,
+    gridStatus: createGridStatus(session.config.gridRows, session.config.gridCols),
+    questionCursor: { "1": 0, "2": 0, "3": 0, "4": 0 },
+    completed: false,
+    hasGuessedCorrectly: false,
+    guessedName: undefined,
+    updatedAt: new Date().toISOString(),
+  };
+  await saveGameState(newState);
+  return newState;
+}
+
