@@ -32,8 +32,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { cellStage } from "@/lib/mock-game";
-import { isSupabaseConfigured, loadSession, resetGameState, saveGameState, subscribeToGameState } from "@/lib/game-service";
+import { DEFAULT_BG_MUSIC_URL, cellStage } from "@/lib/mock-game";
+import { applyMusicToAllRooms, isSupabaseConfigured, loadSession, resetGameState, saveGameState, subscribeToGameState, uploadAsset } from "@/lib/game-service";
 import type { GameSession, GameState, Question, TeamMember } from "@/lib/game-types";
 
 type Point = { x: number; y: number };
@@ -66,7 +66,8 @@ function playSound(kind: "steps" | "hammer" | "success" | "crack" | "fanfare") {
       oscillator.type = kind === "crack" ? "sawtooth" : "triangle";
       oscillator.frequency.value = frequency;
       gain.gain.setValueAtTime(0.0001, context.currentTime + index * 0.14);
-      gain.gain.exponentialRampToValueAtTime(0.12, context.currentTime + index * 0.14 + 0.015);
+      // Tăng âm lượng hiệu ứng lên 0.35 để nổi bật hơn hẳn nhạc nền
+      gain.gain.exponentialRampToValueAtTime(0.35, context.currentTime + index * 0.14 + 0.015);
       gain.gain.exponentialRampToValueAtTime(0.0001, context.currentTime + index * 0.14 + 0.11);
       oscillator.connect(gain).connect(context.destination);
       oscillator.start(context.currentTime + index * 0.14);
@@ -90,6 +91,7 @@ export function GameExperience({ sessionId }: { sessionId: string }) {
   const [symbolicOpen, setSymbolicOpen] = useState(false);
   const [result, setResult] = useState<ResultMessage>(null);
   const [answer, setAnswer] = useState("");
+  const [selectedMultiAnswers, setSelectedMultiAnswers] = useState<string[]>([]);
   const [selectedMemberId, setSelectedMemberId] = useState("");
   const [selectedTargetIndex, setSelectedTargetIndex] = useState<number | null>(null);
   const [selectedQuestion, setSelectedQuestion] = useState<Question | null>(null);
@@ -108,14 +110,16 @@ export function GameExperience({ sessionId }: { sessionId: string }) {
   const [guessFeedback, setGuessFeedback] = useState<{ kind: "success" | "error"; message: string } | null>(null);
   const [showFireworks, setShowFireworks] = useState(false);
 
-  // Nhạc nền
+  // Nhạc nền (mặc định âm lượng 0.2 để luôn êm ái ở dưới nền)
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [musicUrl, setMusicUrl] = useState("");
   const [musicInput, setMusicInput] = useState("");
   const [musicOpen, setMusicOpen] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
-  const [volume, setVolume] = useState(0.5);
+  const [volume, setVolume] = useState(0.2);
+  const [isUploadingMusic, setIsUploadingMusic] = useState(false);
+  const [isApplyingAllMusic, setIsApplyingAllMusic] = useState(false);
   const musicFileRef = useRef<HTMLInputElement | null>(null);
 
   const stageRef = useRef<HTMLDivElement>(null);
@@ -130,14 +134,14 @@ export function GameExperience({ sessionId }: { sessionId: string }) {
         setSelectedMemberId(loaded.members[0]?.id ?? "");
         setActiveMember(loaded.members[0] ?? null);
         // Restore persisted guess state
-        if (loaded.state.hasGuessedCorrectly) {
-          setHasGuessedCorrectly(true);
-          setGuessedName(loaded.state.guessedName ?? "");
-        }
-        // Restore persisted music URL
-        if (loaded.state.bgMusicUrl) {
-          setMusicUrl(loaded.state.bgMusicUrl);
-          setMusicInput(loaded.state.bgMusicUrl);
+        setHasGuessedCorrectly(Boolean(loaded.state.hasGuessedCorrectly));
+        setGuessedName(loaded.state.guessedName ?? "");
+
+        // Restore persisted music URL, fallback to config or default
+        const initialMusic = loaded.state.bgMusicUrl || loaded.config.bgMusicUrl || DEFAULT_BG_MUSIC_URL;
+        if (initialMusic) {
+          setMusicUrl(initialMusic);
+          setMusicInput(initialMusic);
         }
       })
       .catch((error) =>
@@ -145,9 +149,14 @@ export function GameExperience({ sessionId }: { sessionId: string }) {
       );
     const unsubscribe = subscribeToGameState(sessionId, (state) => {
       setSession((current) => (current ? { ...current, state } : current));
-      if (state.hasGuessedCorrectly) {
-        setHasGuessedCorrectly(true);
-        setGuessedName(state.guessedName ?? "");
+      setHasGuessedCorrectly(Boolean(state.hasGuessedCorrectly));
+      setGuessedName(state.guessedName ?? "");
+      if (!state.hasGuessedCorrectly) {
+        setShowFireworks(false);
+      }
+      if (state.bgMusicUrl) {
+        setMusicUrl(state.bgMusicUrl);
+        setMusicInput(state.bgMusicUrl);
       }
     });
     return () => {
@@ -276,7 +285,9 @@ export function GameExperience({ sessionId }: { sessionId: string }) {
     return () => { cancelAnimationFrame(raf); clearTimeout(timeout); };
   }, [showFireworks]);
 
-  // Quản lý Audio nhạc nền
+  // Quản lý Audio nhạc nền: Giới hạn âm lượng BGM tối đa 35% để luôn làm nền êm dịu
+  const bgmVolume = Math.min(1, Math.max(0, volume * 0.35));
+
   useEffect(() => {
     if (!musicUrl) return;
     if (!audioRef.current) {
@@ -285,7 +296,7 @@ export function GameExperience({ sessionId }: { sessionId: string }) {
     }
     const audio = audioRef.current;
     audio.src = musicUrl;
-    audio.volume = volume;
+    audio.volume = bgmVolume;
     audio.muted = isMuted;
     if (isPlaying) void audio.play().catch(() => {/* autoplay policy */});
     return () => { audio.pause(); };
@@ -294,8 +305,8 @@ export function GameExperience({ sessionId }: { sessionId: string }) {
 
   useEffect(() => {
     if (!audioRef.current || !musicUrl) return;
-    audioRef.current.volume = volume;
-  }, [volume, musicUrl]);
+    audioRef.current.volume = bgmVolume;
+  }, [bgmVolume, musicUrl]);
 
   useEffect(() => {
     if (!audioRef.current || !musicUrl) return;
@@ -317,10 +328,10 @@ export function GameExperience({ sessionId }: { sessionId: string }) {
     if (!audioRef.current) audioRef.current = new Audio();
     audioRef.current.src = finalUrl;
     audioRef.current.loop = true;
-    audioRef.current.volume = volume;
+    audioRef.current.volume = bgmVolume;
     audioRef.current.muted = isMuted;
     void audioRef.current.play().then(() => setIsPlaying(true)).catch(() => {});
-    // Persist music URL
+    // Persist music URL vào GameState và cấu hình phòng
     if (session) {
       const nextState: GameState = { ...session.state, bgMusicUrl: finalUrl, updatedAt: new Date().toISOString() };
       setSession({ ...session, state: nextState });
@@ -329,11 +340,32 @@ export function GameExperience({ sessionId }: { sessionId: string }) {
     setMusicOpen(false);
   };
 
-  const handleMusicFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleMusicFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (!file) return;
-    const url = URL.createObjectURL(file);
-    void applyMusic(url);
+    if (!file || !session) return;
+    setIsUploadingMusic(true);
+    try {
+      // Tải file trực tiếp lên Supabase Storage bucket game-assets
+      const cloudUrl = await uploadAsset(file, session.config.sessionId, "audio");
+      void applyMusic(cloudUrl);
+    } catch (err) {
+      alert("Không thể tải file nhạc lên Supabase: " + (err instanceof Error ? err.message : String(err)));
+    } finally {
+      setIsUploadingMusic(false);
+    }
+  };
+
+  const handleApplyMusicToAll = async () => {
+    if (!musicUrl) return;
+    setIsApplyingAllMusic(true);
+    try {
+      await applyMusicToAllRooms(musicUrl);
+      alert("✅ Đã áp dụng bản nhạc này làm âm thanh dùng chung cho TẤT CẢ các phòng thành công!");
+    } catch (err) {
+      alert("Không thể áp dụng nhạc cho tất cả phòng: " + (err instanceof Error ? err.message : String(err)));
+    } finally {
+      setIsApplyingAllMusic(false);
+    }
   };
 
   const handleResetGame = async () => {
@@ -342,11 +374,26 @@ export function GameExperience({ sessionId }: { sessionId: string }) {
     try {
       const resetState = await resetGameState(session);
       setSession({ ...session, state: resetState });
+      // Reset triệt để toàn bộ local state bao gồm câu đố bức tranh bí mật
+      setHasGuessedCorrectly(false);
+      setGuessedName("");
+      setGuessFeedback(null);
+      setShowFireworks(false);
+      setActiveCell(null);
+      setPosition({ x: 0, y: 0 });
+      setPhase("idle");
+      setQuizState("answering");
+      setIsCorrectResult(null);
+      setSelectedMultiAnswers([]);
+      setAnswer("");
+      setQuestionOpen(false);
+      setSymbolicOpen(false);
+      setGuessPictureOpen(false);
       setResetConfirmOpen(false);
       setResult({
         kind: "success",
         title: "Đã làm mới trận chơi!",
-        body: "Toàn bộ các ô thi công đã được đưa về trạng thái ban đầu.",
+        body: "Toàn bộ các ô thi công và kết quả bức tranh bí mật đã được đưa về trạng thái ban đầu.",
       });
     } finally {
       setIsResetting(false);
@@ -404,6 +451,7 @@ export function GameExperience({ sessionId }: { sessionId: string }) {
 
     setSelectedQuestion(q);
     setAnswer("");
+    setSelectedMultiAnswers([]);
     setQuizState("answering");
     setIsCorrectResult(null);
     setQuestionOpen(true);
@@ -415,10 +463,30 @@ export function GameExperience({ sessionId }: { sessionId: string }) {
     }
   };
 
-  // Bước 1: Kiểm tra đáp án và hiển thị trực quan ngay trên modal câu hỏi (màu xanh lá chỗ đúng, màu đỏ chỗ sai)
+  // Bước 1: Kiểm tra đáp án và hiển thị trực quan ngay trên modal câu hỏi
   const checkAnswer = () => {
-    if (!selectedQuestion || !answer.trim()) return;
-    const correct = normalize(answer) === normalize(selectedQuestion.answer);
+    if (!selectedQuestion) return;
+    let correct = false;
+
+    if (selectedQuestion.type === "multi_select") {
+      let expectedAnswers: string[] = [];
+      try {
+        const parsed = JSON.parse(selectedQuestion.answer);
+        expectedAnswers = Array.isArray(parsed) ? parsed : [selectedQuestion.answer];
+      } catch {
+        expectedAnswers = selectedQuestion.answer.split(";").map((s) => s.trim()).filter(Boolean);
+      }
+      if (selectedMultiAnswers.length === 0) return;
+      const normExpected = expectedAnswers.map(normalize).sort();
+      const normSelected = selectedMultiAnswers.map(normalize).sort();
+      correct =
+        normExpected.length === normSelected.length &&
+        normExpected.every((val, idx) => val === normSelected[idx]);
+    } else {
+      if (!answer.trim()) return;
+      correct = normalize(answer) === normalize(selectedQuestion.answer);
+    }
+
     setQuizState("submitted");
     setIsCorrectResult(correct);
     if (correct) {
@@ -631,10 +699,19 @@ export function GameExperience({ sessionId }: { sessionId: string }) {
             <RotateCcw size={14} />
             <span>Làm mới trận</span>
           </Button>
-          <Link href="/" className="exit-home-btn" title="Thoát ra màn hình chính">
+          <a
+            href="/"
+            className="exit-home-btn"
+            title="Thoát ra màn hình chính"
+            onClick={(e) => {
+              e.preventDefault();
+              audioRef.current?.pause();
+              window.location.href = "/";
+            }}
+          >
             <Home size={15} />
             <span>Thoát ra trang chủ</span>
-          </Link>
+          </a>
           <span className="session-pill">
             <span /> {isSupabaseConfigured() ? "Supabase Cloud Realtime" : "Local Realtime"}
           </span>
@@ -910,7 +987,92 @@ export function GameExperience({ sessionId }: { sessionId: string }) {
             </DialogDescription>
           </DialogHeader>
 
-          {selectedQuestion?.type === "mcq" ? (
+          {selectedQuestion?.type === "true_false" ? (
+            /* 1. Đúng / Sai */
+            <div className="tf-options-grid">
+              {["Đúng", "Sai"].map((opt) => {
+                const isSelected = answer === opt;
+                const isOptionCorrect = normalize(opt) === normalize(selectedQuestion.answer);
+
+                let extraClass = opt === "Đúng" ? "btn-tf-game is-true" : "btn-tf-game is-false";
+                if (quizState === "submitted") {
+                  if (isOptionCorrect) extraClass += " is-correct";
+                  else if (isSelected && !isOptionCorrect) extraClass += " is-wrong";
+                  else extraClass += " is-dimmed";
+                } else if (isSelected) {
+                  extraClass += " is-chosen";
+                }
+
+                return (
+                  <button
+                    key={opt}
+                    type="button"
+                    disabled={quizState === "submitted"}
+                    className={extraClass}
+                    onClick={() => setAnswer(opt)}
+                  >
+                    {opt === "Đúng" ? <Check size={28} /> : <X size={28} />}
+                    <span>{opt.toUpperCase()}</span>
+                    {quizState === "submitted" && isOptionCorrect && (
+                      <span className="tf-badge-result correct">Đáp án chính xác</span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          ) : selectedQuestion?.type === "multi_select" ? (
+            /* 2. Chọn nhiều đáp án */
+            <div className="answer-options multi-select-options">
+              {selectedQuestion.options.map((option, index) => {
+                let expectedAnswers: string[] = [];
+                try {
+                  const parsed = JSON.parse(selectedQuestion.answer);
+                  expectedAnswers = Array.isArray(parsed) ? parsed : [selectedQuestion.answer];
+                } catch {
+                  expectedAnswers = selectedQuestion.answer.split(";").map((s) => s.trim()).filter(Boolean);
+                }
+                const isSelected = selectedMultiAnswers.includes(option);
+                const isOptionCorrect = expectedAnswers.map(normalize).includes(normalize(option));
+
+                let extraClass = "";
+                if (quizState === "submitted") {
+                  if (isOptionCorrect) {
+                    extraClass = "is-correct";
+                  } else if (isSelected && !isOptionCorrect) {
+                    extraClass = "is-wrong";
+                  } else {
+                    extraClass = "is-dimmed";
+                  }
+                }
+
+                return (
+                  <button
+                    key={option}
+                    type="button"
+                    data-active={isSelected}
+                    className={`multi-opt-btn ${extraClass}`}
+                    disabled={quizState === "submitted"}
+                    onClick={() => {
+                      setSelectedMultiAnswers((prev) =>
+                        prev.includes(option) ? prev.filter((item) => item !== option) : [...prev, option]
+                      );
+                    }}
+                  >
+                    <span className="checkbox-indicator">{isSelected ? <Check size={14} /> : null}</span>
+                    <span className="option-code">{String.fromCharCode(65 + index)}</span>
+                    <span style={{ flex: 1, textAlign: "left" }}>{option}</span>
+                    {quizState === "submitted" && isOptionCorrect && (
+                      <Check size={18} style={{ color: "#16a34a", flexShrink: 0 }} />
+                    )}
+                    {quizState === "submitted" && isSelected && !isOptionCorrect && (
+                      <X size={18} style={{ color: "#dc2626", flexShrink: 0 }} />
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          ) : selectedQuestion?.type === "mcq" ? (
+            /* 3. Trắc nghiệm đơn */
             <div className="answer-options">
               {selectedQuestion.options.map((option, index) => {
                 const isSelected = answer === option;
@@ -948,6 +1110,7 @@ export function GameExperience({ sessionId }: { sessionId: string }) {
               })}
             </div>
           ) : (
+            /* 4. Crossword */
             <div className="crossword-answer">
               <span>ĐÁP ÁN Ô CHỮ</span>
               <input
@@ -979,9 +1142,18 @@ export function GameExperience({ sessionId }: { sessionId: string }) {
               <div>
                 <strong>{isCorrectResult ? "CHÍNH XÁC! HOAN HÔ!" : "RẤT TIẾC, CHƯA CHÍNH XÁC!"}</strong>
                 <span>
-                  {isCorrectResult
-                    ? `Đáp án đúng là: "${selectedQuestion?.answer}". Kỹ sư sẽ tiến hành gắn mảnh ghép này!`
-                    : `Đáp án chính xác là: "${selectedQuestion?.answer}" (vừa được làm nổi bật màu xanh lá phía trên). Ô này sẽ dùng câu hỏi dự bị cho lượt thi công tiếp theo!`}
+                  {(() => {
+                    let ansText = selectedQuestion?.answer ?? "";
+                    if (selectedQuestion?.type === "multi_select") {
+                      try {
+                        const parsed = JSON.parse(ansText);
+                        if (Array.isArray(parsed)) ansText = parsed.join(" ; ");
+                      } catch { /* fallback */ }
+                    }
+                    return isCorrectResult
+                      ? `Đáp án đúng là: "${ansText}". Kỹ sư sẽ tiến hành gắn mảnh ghép này!`
+                      : `Đáp án chính xác là: "${ansText}" (vừa được làm nổi bật màu xanh lá phía trên). Ô này sẽ dùng câu hỏi dự bị cho lượt thi công tiếp theo!`;
+                  })()}
                 </span>
               </div>
             </div>
@@ -995,7 +1167,11 @@ export function GameExperience({ sessionId }: { sessionId: string }) {
                 </Button>
                 <Button
                   onClick={checkAnswer}
-                  disabled={!answer.trim()}
+                  disabled={
+                    selectedQuestion?.type === "multi_select"
+                      ? selectedMultiAnswers.length === 0
+                      : !answer.trim()
+                  }
                   style={{ background: "#b91f2e", color: "#fff", fontWeight: 700 }}
                 >
                   <Hammer size={16} /> Chốt đáp án
@@ -1174,10 +1350,11 @@ export function GameExperience({ sessionId }: { sessionId: string }) {
             <Button
               type="button"
               variant="outline"
+              disabled={isUploadingMusic}
               onClick={() => musicFileRef.current?.click()}
               style={{ display: "flex", alignItems: "center", gap: 8, justifyContent: "center" }}
             >
-              <Upload size={16} /> Tải file nhạc từ máy tính…
+              <Upload size={16} /> {isUploadingMusic ? "Đang tải nhạc lên Supabase..." : "Tải file nhạc từ máy tính…"}
             </Button>
             <input
               ref={musicFileRef}
@@ -1187,23 +1364,43 @@ export function GameExperience({ sessionId }: { sessionId: string }) {
               onChange={handleMusicFileChange}
             />
             {musicUrl && (
-              <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: 10 }}>
-                <Music2 size={18} style={{ color: "#16a34a", flexShrink: 0 }} />
-                <div style={{ flex: 1, overflow: "hidden" }}>
-                  <span style={{ fontSize: "0.72rem", fontWeight: 700, color: "#166534", display: "block" }}>ĐANG DÙNG NHẠC</span>
-                  <span style={{ fontSize: "0.8rem", color: "#064e3b", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "block" }}>{musicUrl.startsWith("blob:") ? "File nhạc từ máy tính" : musicUrl}</span>
+              <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 4 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: 10 }}>
+                  <Music2 size={18} style={{ color: "#16a34a", flexShrink: 0 }} />
+                  <div style={{ flex: 1, overflow: "hidden" }}>
+                    <span style={{ fontSize: "0.72rem", fontWeight: 700, color: "#166534", display: "block" }}>ĐANG DÙNG NHẠC</span>
+                    <span style={{ fontSize: "0.8rem", color: "#064e3b", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "block" }}>{musicUrl.startsWith("blob:") ? "File nhạc từ máy tính" : musicUrl}</span>
+                  </div>
+                  <Button
+                    type="button" variant="ghost" style={{ color: "#dc2626", padding: "4px 8px", minWidth: 0 }}
+                    onClick={() => {
+                      audioRef.current?.pause();
+                      setMusicUrl("");
+                      setMusicInput("");
+                      setIsPlaying(false);
+                    }}
+                    title="Xóa nhạc nền"
+                  >
+                    <X size={15} />
+                  </Button>
                 </div>
                 <Button
-                  type="button" variant="ghost" style={{ color: "#dc2626", padding: "4px 8px", minWidth: 0 }}
-                  onClick={() => {
-                    audioRef.current?.pause();
-                    setMusicUrl("");
-                    setMusicInput("");
-                    setIsPlaying(false);
+                  type="button"
+                  disabled={isApplyingAllMusic || !musicUrl}
+                  onClick={() => void handleApplyMusicToAll()}
+                  style={{
+                    background: "#059669",
+                    color: "#fff",
+                    fontWeight: 600,
+                    fontSize: "0.8rem",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    gap: 6,
+                    padding: "8px 12px",
                   }}
-                  title="Xóa nhạc nền"
                 >
-                  <X size={15} />
+                  {isApplyingAllMusic ? "Đang đồng bộ..." : "🌍 Áp dụng nhạc này cho TẤT CẢ các phòng"}
                 </Button>
               </div>
             )}

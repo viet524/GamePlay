@@ -849,3 +849,311 @@ button { font: inherit; }
   padding: 0 18px;
   border-radius: 12px;
 }
+
+/* =========================================================
+   QUESTION TYPES: TRUE/FALSE, MULTI-SELECT, DYNAMIC MCQ
+   ========================================================= */
+
+/* 1. True/False Game Buttons */
+.tf-options-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin: 12px 0 6px;
+}
+.btn-tf-game {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 22px 16px;
+  border-radius: 16px;
+  font-weight: 800;
+  font-size: 1.15rem;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  outline: none;
+}
+.btn-tf-game.is-true {
+  color: #166534;
+  background: #f0fdf4;
+  border: 2px solid #86efac;
+}
+.btn-tf-game.is-false {
+  color: #991b1b;
+  background: #fef2f2;
+  border: 2px solid #fca5a5;
+}
+.btn-tf-game:hover:not(:disabled) {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.08);
+}
+.btn-tf-game.is-chosen.is-true {
+  background: #dcfce7;
+  border-color: #16a34a;
+  box-shadow: 0 0 0 4px rgba(22, 163, 74, 0.25);
+}
+.btn-tf-game.is-chosen.is-false {
+  background: #fee2e2;
+  border-color: #dc2626;
+  box-shadow: 0 0 0 4px rgba(220, 38, 38, 0.25);
+}
+.btn-tf-game.is-correct {
+  background: #15803d !important;
+  color: #ffffff !important;
+  border-color: #15803d !important;
+  box-shadow: 0 0 0 4px rgba(21, 128, 61, 0.35) !important;
+  transform: scale(1.02);
+}
+.btn-tf-game.is-wrong {
+  background: #b91c1c !important;
+  color: #ffffff !important;
+  border-color: #b91c1c !important;
+  opacity: 0.85;
+}
+.btn-tf-game.is-dimmed {
+  opacity: 0.35;
+}
+.tf-badge-result {
+  font-size: 0.72rem;
+  font-weight: 700;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.95);
+  color: #15803d;
+  margin-top: 4px;
+}
+
+/* 2. Multi-Select Game Buttons */
+.multi-select-options {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.multi-opt-btn {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  background: #faf7ef;
+  border: 1.5px solid #dcd3c4;
+  border-radius: 12px;
+  font-weight: 600;
+  font-size: 0.92rem;
+  color: #173b32;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  width: 100%;
+}
+.multi-opt-btn:hover:not(:disabled) {
+  background: #f5eedf;
+  border-color: #c59a35;
+}
+.multi-opt-btn[data-active="true"] {
+  background: #fff8eb;
+  border-color: #b91f2e;
+  box-shadow: 0 0 0 2px rgba(185, 31, 46, 0.2);
+}
+.checkbox-indicator {
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  border: 2px solid #c59a35;
+  background: #ffffff;
+  display: grid;
+  place-items: center;
+  color: #ffffff;
+  flex-shrink: 0;
+  transition: all 0.15s ease;
+}
+.multi-opt-btn[data-active="true"] .checkbox-indicator {
+  background: #b91f2e;
+  border-color: #b91f2e;
+}
+.multi-opt-btn .option-code {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  background: #eee8dc;
+  color: #786d58;
+  font-size: 0.76rem;
+  font-weight: 800;
+  flex-shrink: 0;
+}
+.multi-opt-btn.is-correct,
+.answer-options button.is-correct {
+  border-color: #16a34a !important;
+  background: #f0fdf4 !important;
+  color: #14532d !important;
+  font-weight: 700 !important;
+  box-shadow: 0 0 0 3px rgba(22, 163, 74, 0.25) !important;
+}
+.multi-opt-btn.is-wrong,
+.answer-options button.is-wrong {
+  border-color: #dc2626 !important;
+  background: #fef2f2 !important;
+  color: #991b1b !important;
+  text-decoration: line-through;
+}
+.multi-opt-btn.is-dimmed,
+.answer-options button.is-dimmed {
+  opacity: 0.45;
+}
+
+/* 3. Admin Dynamic Options Editor */
+.option-editor-dynamic {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 4px;
+}
+.options-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.option-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.option-row input {
+  flex: 1;
+  padding: 8px 11px;
+  border: 1px solid #dcd3c4;
+  background: #faf7ef;
+  border-radius: 8px;
+  color: #233c35;
+  font-size: 0.88rem;
+  outline: none;
+}
+.option-row input:focus {
+  border-color: #b99134;
+  box-shadow: 0 0 0 3px rgba(185, 145, 52, 0.1);
+}
+.option-letter {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
+  background: #ece5d6;
+  color: #6b5c3e;
+  font-weight: 800;
+  font-size: 0.74rem;
+  flex-shrink: 0;
+}
+.checkbox-wrap {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.checkbox-wrap input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  accent-color: #2563eb;
+  cursor: pointer;
+}
+.btn-check-answer {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  border: 1.5px solid #d1c7b3;
+  background: #fff;
+  color: #9ca3af;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: all 0.15s ease;
+}
+.btn-check-answer:hover {
+  border-color: #16a34a;
+  color: #16a34a;
+}
+.btn-check-answer.is-active {
+  background: #16a34a;
+  border-color: #16a34a;
+  color: #ffffff;
+  box-shadow: 0 2px 6px rgba(22, 163, 74, 0.35);
+}
+.btn-remove-option {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 7px;
+  border: 1px solid #fecaca;
+  background: #fff;
+  color: #ef4444;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.15s ease;
+}
+.btn-remove-option:hover {
+  background: #fee2e2;
+}
+.btn-add-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 8px;
+  border: 1px dashed #c49a37;
+  background: #fdfbf7;
+  color: #8c6d1f;
+  font-size: 0.78rem;
+  font-weight: 700;
+  cursor: pointer;
+  width: fit-content;
+  transition: background 0.15s ease;
+}
+.btn-add-option:hover {
+  background: #fbf4e2;
+}
+
+/* True/False in Admin */
+.tf-editor-box {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 4px;
+}
+.btn-tf-pick {
+  flex: 1;
+  padding: 10px 14px;
+  border-radius: 10px;
+  border: 2px solid #e2d9c8;
+  background: #fdfbf7;
+  font-weight: 700;
+  font-size: 0.88rem;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  transition: all 0.15s ease;
+}
+.btn-tf-pick.is-true {
+  color: #166534;
+}
+.btn-tf-pick.is-false {
+  color: #991b1b;
+}
+.btn-tf-pick.is-selected.is-true {
+  background: #dcfce7;
+  border-color: #16a34a;
+  box-shadow: 0 0 0 3px rgba(22, 163, 74, 0.2);
+}
+.btn-tf-pick.is-selected.is-false {
+  background: #fee2e2;
+  border-color: #dc2626;
+  box-shadow: 0 0 0 3px rgba(220, 38, 38, 0.2);
+}
+

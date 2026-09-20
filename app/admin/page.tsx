@@ -15,6 +15,8 @@ import {
   Users,
   Building2,
   HelpCircle,
+  Music,
+  X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -24,6 +26,7 @@ import {
   getAutomaticGrid,
 } from "@/lib/mock-game";
 import {
+  applyMusicToAllRooms,
   isSupabaseConfigured,
   listPublicRooms,
   loadSession,
@@ -167,8 +170,8 @@ export default function AdminPage() {
       id: crypto.randomUUID(),
       type: "mcq",
       question: "",
-      options: ["Đáp án A", "Đáp án B", "Đáp án C", "Đáp án D"],
-      answer: "",
+      options: ["Lựa chọn A", "Lựa chọn B", "Lựa chọn C", "Lựa chọn D"],
+      answer: "Lựa chọn A",
       isBackup,
     };
     setSession((current) => {
@@ -202,24 +205,45 @@ export default function AdminPage() {
 
   const handleFile = async (
     file: File | undefined,
-    kind: "building" | "avatar",
+    kind: "building" | "avatar" | "audio",
     memberIndex?: number
   ) => {
     if (!file) return;
-    setStatus("Đang tải ảnh lên Supabase Storage…");
+    setStatus("Đang tải tệp lên Supabase Storage…");
     try {
       const url = await uploadAsset(file, session.config.sessionId, kind);
       if (kind === "building") updateConfig("buildingImageUrl", url);
-      else if (memberIndex !== undefined)
+      else if (kind === "audio") {
+        updateConfig("bgMusicUrl", url);
+        setSession((current) => ({
+          ...current,
+          state: { ...current.state, bgMusicUrl: url },
+        }));
+      } else if (memberIndex !== undefined)
         setSession((current) => ({
           ...current,
           members: current.members.map((member, index) =>
             index === memberIndex ? { ...member, avatarUrl: url } : member
           ),
         }));
-      setStatus("Đã cập nhật ảnh thành công.");
+      setStatus("Đã cập nhật tệp thành công lên Supabase Cloud.");
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : "Không thể tải ảnh");
+      setStatus(error instanceof Error ? error.message : "Không thể tải tệp");
+    }
+  };
+
+  const handleApplyMusicToAll = async () => {
+    const music = session.config.bgMusicUrl || session.state.bgMusicUrl;
+    if (!music) {
+      setStatus("❌ Chưa có đường dẫn nhạc nền để áp dụng!");
+      return;
+    }
+    setStatus("Đang đồng bộ nhạc nền này cho tất cả phòng trên Supabase…");
+    try {
+      await applyMusicToAllRooms(music);
+      setStatus("✅ Đã áp dụng bộ nhạc nền này cho TẤT CẢ các phòng chơi thành công!");
+    } catch (err) {
+      setStatus("Không thể đồng bộ nhạc: " + (err instanceof Error ? err.message : String(err)));
     }
   };
 
@@ -289,12 +313,317 @@ export default function AdminPage() {
   const allBackupQuestions = allQuestions.filter((q) => q.isBackup);
   const totalQuestions = allQuestions.length;
 
+  const getMultiAnswers = (raw: string): string[] => {
+    try {
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed : [raw];
+    } catch {
+      return raw ? raw.split(";").map((s) => s.trim()).filter(Boolean) : [];
+    }
+  };
+
+  const renderQuestionEditor = (question: Question, questionIndex: number, isBackup: boolean) => {
+    const multiAnswers = getMultiAnswers(question.answer);
+
+    return (
+      <div className="question-card" key={question.id} style={isBackup ? { background: "#fffdf9" } : undefined}>
+        <div className="question-number" style={isBackup ? { background: "#fef3c7", color: "#b45309" } : undefined}>
+          {isBackup ? `D${String(questionIndex + 1)}` : String(questionIndex + 1).padStart(2, "0")}
+        </div>
+        <div className="question-fields">
+          <div className="question-meta">
+            <select
+              value={question.type}
+              onChange={(event) => {
+                const nextType = event.target.value as Question["type"];
+                let nextOptions = question.options;
+                let nextAnswer = question.answer;
+                if (nextType === "crossword") {
+                  nextOptions = [];
+                } else if (nextType === "true_false") {
+                  nextOptions = ["Đúng", "Sai"];
+                  if (nextAnswer !== "Đúng" && nextAnswer !== "Sai") nextAnswer = "Đúng";
+                } else if (nextType === "mcq") {
+                  if (nextOptions.length < 2) nextOptions = ["Lựa chọn A", "Lựa chọn B", "Lựa chọn C", "Lựa chọn D"];
+                  if (nextAnswer === "Đúng" || nextAnswer === "Sai" || nextAnswer.startsWith("[")) {
+                    nextAnswer = nextOptions[0] ?? "";
+                  }
+                } else if (nextType === "multi_select") {
+                  if (nextOptions.length < 2) nextOptions = ["Lựa chọn A", "Lựa chọn B", "Lựa chọn C", "Lựa chọn D"];
+                  if (!nextAnswer.startsWith("[")) {
+                    nextAnswer = JSON.stringify([nextOptions[0] ?? ""]);
+                  }
+                }
+                updateQuestion(question.id, {
+                  type: nextType,
+                  options: nextOptions,
+                  answer: nextAnswer,
+                });
+              }}
+            >
+              <option value="mcq">Trắc nghiệm 1 đáp án (MCQ)</option>
+              <option value="multi_select">Chọn nhiều đáp án (Hộp kiểm)</option>
+              <option value="true_false">Đúng / Sai (2 nút)</option>
+              <option value="crossword">Điền từ (Ô chữ)</option>
+            </select>
+            <span
+              style={{
+                fontSize: "0.72rem",
+                fontWeight: 700,
+                background: isBackup ? "#fef3c7" : "#dcfce7",
+                color: isBackup ? "#b45309" : "#166534",
+                padding: "3px 8px",
+                borderRadius: 6,
+              }}
+            >
+              {isBackup ? `Câu dự bị #${questionIndex + 1}` : `Ô mảnh ghép #${questionIndex + 1}`}
+            </span>
+          </div>
+
+          <input
+            value={question.question}
+            placeholder={isBackup ? "Nhập nội dung câu hỏi dự bị…" : "Nhập nội dung câu hỏi…"}
+            onChange={(event) =>
+              updateQuestion(question.id, {
+                question: event.target.value,
+              })
+            }
+          />
+
+          {/* Dạng 1: Trắc nghiệm đơn MCQ */}
+          {question.type === "mcq" && (
+            <div className="option-editor-dynamic">
+              <div style={{ fontSize: "0.75rem", color: "#64748b", marginBottom: 6, fontWeight: 600 }}>
+                Nhập các lựa chọn và bấm biểu tượng ✓ để chọn đáp án đúng:
+              </div>
+              <div className="options-list">
+                {question.options.map((option, optIdx) => {
+                  const isAnswer = question.answer === option && option !== "";
+                  return (
+                    <div key={optIdx} className="option-row">
+                      <span className="option-letter">{String.fromCharCode(65 + optIdx)}</span>
+                      <input
+                        value={option}
+                        placeholder={`Lựa chọn ${String.fromCharCode(65 + optIdx)}…`}
+                        onChange={(event) => {
+                          const oldVal = option;
+                          const newVal = event.target.value;
+                          const nextOpts = question.options.map((item, index) =>
+                            index === optIdx ? newVal : item
+                          );
+                          const nextAns = question.answer === oldVal ? newVal : question.answer;
+                          updateQuestion(question.id, {
+                            options: nextOpts,
+                            answer: nextAns,
+                          });
+                        }}
+                      />
+                      <button
+                        type="button"
+                        className={`btn-check-answer ${isAnswer ? "is-active" : ""}`}
+                        title={isAnswer ? "Đây là đáp án đúng" : "Bấm để chọn làm đáp án đúng"}
+                        onClick={() => updateQuestion(question.id, { answer: option })}
+                      >
+                        <Check size={14} />
+                      </button>
+                      {question.options.length > 2 && (
+                        <button
+                          type="button"
+                          className="btn-remove-option"
+                          title="Xóa lựa chọn này"
+                          onClick={() => {
+                            const nextOpts = question.options.filter((_, idx) => idx !== optIdx);
+                            const nextAns = question.answer === option ? (nextOpts[0] ?? "") : question.answer;
+                            updateQuestion(question.id, {
+                              options: nextOpts,
+                              answer: nextAns,
+                            });
+                          }}
+                        >
+                          <Trash2 size={13} />
+                        </button>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 8 }}>
+                {question.options.length < 8 ? (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="btn-add-option"
+                    onClick={() => {
+                      const nextLetter = String.fromCharCode(65 + question.options.length);
+                      updateQuestion(question.id, {
+                        options: [...question.options, `Lựa chọn ${nextLetter}`],
+                      });
+                    }}
+                  >
+                    <Plus size={13} /> Thêm lựa chọn ({String.fromCharCode(65 + question.options.length)})
+                  </Button>
+                ) : <span />}
+                <span style={{ fontSize: "0.76rem", color: "#166534", fontWeight: 700 }}>
+                  Đáp án đúng: <u>{question.answer || "(Chưa chọn)"}</u>
+                </span>
+              </div>
+            </div>
+          )}
+
+          {/* Dạng 2: Chọn nhiều đáp án Multi-select */}
+          {question.type === "multi_select" && (
+            <div className="option-editor-dynamic">
+              <div style={{ fontSize: "0.75rem", color: "#64748b", marginBottom: 6, fontWeight: 600 }}>
+                Tick chọn các ô đáp án đúng bên dưới (có thể chọn 2, 3 hoặc nhiều đáp án đúng):
+              </div>
+              <div className="options-list">
+                {question.options.map((option, optIdx) => {
+                  const isChecked = multiAnswers.includes(option);
+                  return (
+                    <div key={optIdx} className="option-row">
+                      <label className="checkbox-wrap" title="Đánh dấu đây là một đáp án đúng">
+                        <input
+                          type="checkbox"
+                          checked={isChecked}
+                          onChange={(e) => {
+                            const current = getMultiAnswers(question.answer);
+                            const next = e.target.checked
+                              ? [...current, option]
+                              : current.filter((item) => item !== option);
+                            updateQuestion(question.id, { answer: JSON.stringify(next) });
+                          }}
+                        />
+                        <span className="option-letter">{String.fromCharCode(65 + optIdx)}</span>
+                      </label>
+                      <input
+                        value={option}
+                        placeholder={`Lựa chọn ${String.fromCharCode(65 + optIdx)}…`}
+                        onChange={(event) => {
+                          const oldVal = option;
+                          const newVal = event.target.value;
+                          const nextOpts = question.options.map((item, index) =>
+                            index === optIdx ? newVal : item
+                          );
+                          const currentSelected = getMultiAnswers(question.answer);
+                          const nextSelected = currentSelected.map((item) => (item === oldVal ? newVal : item));
+                          updateQuestion(question.id, {
+                            options: nextOpts,
+                            answer: JSON.stringify(nextSelected),
+                          });
+                        }}
+                      />
+                      {question.options.length > 2 && (
+                        <button
+                          type="button"
+                          className="btn-remove-option"
+                          title="Xóa lựa chọn này"
+                          onClick={() => {
+                            const nextOpts = question.options.filter((_, idx) => idx !== optIdx);
+                            const currentSelected = getMultiAnswers(question.answer);
+                            const nextSelected = currentSelected.filter((item) => item !== option);
+                            updateQuestion(question.id, {
+                              options: nextOpts,
+                              answer: JSON.stringify(nextSelected),
+                            });
+                          }}
+                        >
+                          <Trash2 size={13} />
+                        </button>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 8 }}>
+                {question.options.length < 8 ? (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="btn-add-option"
+                    onClick={() => {
+                      const nextLetter = String.fromCharCode(65 + question.options.length);
+                      updateQuestion(question.id, {
+                        options: [...question.options, `Lựa chọn ${nextLetter}`],
+                      });
+                    }}
+                  >
+                    <Plus size={13} /> Thêm lựa chọn ({String.fromCharCode(65 + question.options.length)})
+                  </Button>
+                ) : <span />}
+                <span style={{ fontSize: "0.76rem", color: "#2563eb", fontWeight: 700 }}>
+                  Đã tick: <u>{multiAnswers.length > 0 ? multiAnswers.join(" ; ") : "(Chưa tick đáp án nào)"}</u>
+                </span>
+              </div>
+            </div>
+          )}
+
+          {/* Dạng 3: Đúng / Sai True/False */}
+          {question.type === "true_false" && (
+            <div className="tf-editor-box">
+              <div style={{ fontSize: "0.75rem", color: "#64748b", marginBottom: 6, fontWeight: 600 }}>
+                Chọn kết luận chính xác cho câu hỏi này:
+              </div>
+              <div style={{ display: "flex", gap: 10 }}>
+                <button
+                  type="button"
+                  className={`btn-tf-pick is-true ${question.answer === "Đúng" ? "is-selected" : ""}`}
+                  onClick={() => updateQuestion(question.id, { options: ["Đúng", "Sai"], answer: "Đúng" })}
+                >
+                  <Check size={16} /> Nhận định ĐÚNG
+                </button>
+                <button
+                  type="button"
+                  className={`btn-tf-pick is-false ${question.answer === "Sai" ? "is-selected" : ""}`}
+                  onClick={() => updateQuestion(question.id, { options: ["Đúng", "Sai"], answer: "Sai" })}
+                >
+                  <X size={16} /> Nhận định SAI
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Dạng 4: Điền từ Crossword */}
+          {question.type === "crossword" && (
+            <label className="answer-field">
+              <span>Đáp án ô chữ (từ hoặc cụm từ cần điền)</span>
+              <input
+                value={question.answer}
+                placeholder="Nhập đáp án đúng chính xác…"
+                onChange={(event) =>
+                  updateQuestion(question.id, {
+                    answer: event.target.value,
+                  })
+                }
+              />
+            </label>
+          )}
+        </div>
+        <button
+          className="delete-question"
+          aria-label="Xóa câu hỏi"
+          onClick={() => removeQuestion(question.id)}
+        >
+          <Trash2 size={16} />
+        </button>
+      </div>
+    );
+  };
+
   return (
     <main className="admin-shell">
       <header className="admin-topbar">
-        <Link href="/" className="back-link">
+        <a
+          href="/"
+          className="back-link"
+          onClick={(e) => {
+            e.preventDefault();
+            window.location.href = "/";
+          }}
+        >
           <ArrowLeft size={17} /> Về thư viện
-        </Link>
+        </a>
         <div>
           <span>TRUNG TÂM ĐIỀU HÀNH</span>
           <h1>Quản lý phòng thi công</h1>
@@ -442,6 +771,49 @@ export default function AdminPage() {
                   onChange={(event) => void handleFile(event.target.files?.[0], "building")}
                 />
               </label>
+              <div className="full-field" style={{ background: "#fbf8f2", padding: "14px 18px", borderRadius: 10, border: "1px solid #e7dcce" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, flexWrap: "wrap", gap: 8 }}>
+                  <span style={{ fontSize: "0.85rem", fontWeight: 700, color: "#173b32", display: "flex", alignItems: "center", gap: 6 }}>
+                    <Music size={16} style={{ color: "#7c3aed" }} /> Bộ âm thanh / Nhạc nền dùng chung (Lưu trên Supabase)
+                  </span>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    style={{ fontSize: "0.75rem", borderColor: "#7c3aed", color: "#6d28d9", fontWeight: 700 }}
+                    onClick={() => void handleApplyMusicToAll()}
+                    title="Đồng bộ bản nhạc này cho tất cả phòng có trong hệ thống"
+                  >
+                    Áp dụng nhạc này cho TẤT CẢ các phòng
+                  </Button>
+                </div>
+                <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                  <input
+                    style={{ flex: 1, minWidth: 240 }}
+                    value={session.config.bgMusicUrl || session.state.bgMusicUrl || ""}
+                    placeholder="URL file nhạc MP3/OGG hoặc bấm tải file bên cạnh…"
+                    onChange={(e) => {
+                      updateConfig("bgMusicUrl", e.target.value);
+                      setSession((current) => ({
+                        ...current,
+                        state: { ...current.state, bgMusicUrl: e.target.value },
+                      }));
+                    }}
+                  />
+                  <label style={{ cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 6, padding: "8px 14px", background: "#f3e8ff", color: "#6b21a8", borderRadius: 8, fontSize: "0.8rem", fontWeight: 700 }}>
+                    <Upload size={14} /> Tải file MP3 lên Supabase
+                    <input
+                      type="file"
+                      accept="audio/*"
+                      style={{ display: "none" }}
+                      onChange={(e) => void handleFile(e.target.files?.[0], "audio")}
+                    />
+                  </label>
+                </div>
+                <small style={{ display: "block", marginTop: 6, color: "#78716c", fontSize: "0.74rem" }}>
+                  Mọi tệp âm thanh tải lên sẽ được lưu trữ đám mây vĩnh viễn trên Supabase Storage (không bị mất khi làm mới trận hay chuyển thiết bị).
+                </small>
+              </div>
             </div>
           </section>
 
@@ -542,83 +914,9 @@ export default function AdminPage() {
                   </Button>
                 </div>
               ) : (
-                allMainQuestions.map((question, questionIndex) => (
-                  <div className="question-card" key={question.id}>
-                    <div className="question-number">
-                      {String(questionIndex + 1).padStart(2, "0")}
-                    </div>
-                    <div className="question-fields">
-                      <div className="question-meta">
-                        <select
-                          value={question.type}
-                          onChange={(event) =>
-                            updateQuestion(question.id, {
-                              type: event.target.value as Question["type"],
-                              options:
-                                event.target.value === "crossword"
-                                  ? []
-                                  : question.options.length
-                                  ? question.options
-                                  : ["A", "B", "C", "D"],
-                            })
-                          }
-                        >
-                          <option value="mcq">Trắc nghiệm (MCQ)</option>
-                          <option value="crossword">Điền từ (Ô chữ)</option>
-                        </select>
-                        <span style={{ fontSize: "0.72rem", color: "#166534", fontWeight: 700, background: "#dcfce7", padding: "3px 8px", borderRadius: 6 }}>
-                          Ô mảnh ghép #{questionIndex + 1}
-                        </span>
-                      </div>
-                      <input
-                        value={question.question}
-                        placeholder="Nhập nội dung câu hỏi…"
-                        onChange={(event) =>
-                          updateQuestion(question.id, {
-                            question: event.target.value,
-                          })
-                        }
-                      />
-                      {question.type === "mcq" && (
-                        <div className="option-editor">
-                          {question.options.map((option, optionIndex) => (
-                            <input
-                              key={optionIndex}
-                              value={option}
-                              placeholder={`Lựa chọn ${String.fromCharCode(65 + optionIndex)}…`}
-                              onChange={(event) =>
-                                updateQuestion(question.id, {
-                                  options: question.options.map((item, index) =>
-                                    index === optionIndex ? event.target.value : item
-                                  ),
-                                })
-                              }
-                            />
-                          ))}
-                        </div>
-                      )}
-                      <label className="answer-field">
-                        <span>Đáp án đúng</span>
-                        <input
-                          value={question.answer}
-                          placeholder="Nhập đáp án đúng chính xác…"
-                          onChange={(event) =>
-                            updateQuestion(question.id, {
-                              answer: event.target.value,
-                            })
-                          }
-                        />
-                      </label>
-                    </div>
-                    <button
-                      className="delete-question"
-                      aria-label="Xóa câu hỏi"
-                      onClick={() => removeQuestion(question.id)}
-                    >
-                      <Trash2 size={16} />
-                    </button>
-                  </div>
-                ))
+                allMainQuestions.map((question, questionIndex) =>
+                  renderQuestionEditor(question, questionIndex, false)
+                )
               )}
             </div>
 
@@ -657,83 +955,9 @@ export default function AdminPage() {
                   </Button>
                 </div>
               ) : (
-                allBackupQuestions.map((question, questionIndex) => (
-                  <div className="question-card" key={question.id} style={{ background: "#fffdf9" }}>
-                    <div className="question-number" style={{ background: "#fef3c7", color: "#b45309" }}>
-                      D{String(questionIndex + 1)}
-                    </div>
-                    <div className="question-fields">
-                      <div className="question-meta">
-                        <select
-                          value={question.type}
-                          onChange={(event) =>
-                            updateQuestion(question.id, {
-                              type: event.target.value as Question["type"],
-                              options:
-                                event.target.value === "crossword"
-                                  ? []
-                                  : question.options.length
-                                  ? question.options
-                                  : ["A", "B", "C", "D"],
-                            })
-                          }
-                        >
-                          <option value="mcq">Trắc nghiệm (MCQ)</option>
-                          <option value="crossword">Điền từ (Ô chữ)</option>
-                        </select>
-                        <span style={{ fontSize: "0.72rem", color: "#b45309", fontWeight: 700, background: "#fef3c7", padding: "3px 8px", borderRadius: 6 }}>
-                          Câu dự bị #{questionIndex + 1}
-                        </span>
-                      </div>
-                      <input
-                        value={question.question}
-                        placeholder="Nhập nội dung câu hỏi dự bị…"
-                        onChange={(event) =>
-                          updateQuestion(question.id, {
-                            question: event.target.value,
-                          })
-                        }
-                      />
-                      {question.type === "mcq" && (
-                        <div className="option-editor">
-                          {question.options.map((option, optionIndex) => (
-                            <input
-                              key={optionIndex}
-                              value={option}
-                              placeholder={`Lựa chọn ${String.fromCharCode(65 + optionIndex)}…`}
-                              onChange={(event) =>
-                                updateQuestion(question.id, {
-                                  options: question.options.map((item, index) =>
-                                    index === optionIndex ? event.target.value : item
-                                  ),
-                                })
-                              }
-                            />
-                          ))}
-                        </div>
-                      )}
-                      <label className="answer-field">
-                        <span>Đáp án đúng</span>
-                        <input
-                          value={question.answer}
-                          placeholder="Nhập đáp án đúng chính xác…"
-                          onChange={(event) =>
-                            updateQuestion(question.id, {
-                              answer: event.target.value,
-                            })
-                          }
-                        />
-                      </label>
-                    </div>
-                    <button
-                      className="delete-question"
-                      aria-label="Xóa câu hỏi dự bị"
-                      onClick={() => removeQuestion(question.id)}
-                    >
-                      <Trash2 size={16} />
-                    </button>
-                  </div>
-                ))
+                allBackupQuestions.map((question, questionIndex) =>
+                  renderQuestionEditor(question, questionIndex, true)
+                )
               )}
             </div>
           </section>

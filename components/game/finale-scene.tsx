@@ -161,10 +161,14 @@ export function FinaleScene({ sessionId }: { sessionId: string }) {
               >
                 <RotateCcw size={16} /> {isResetting ? "Đang đặt lại…" : "Chơi lại từ đầu"}
               </Button>
-              <Button asChild variant="outline" className="btn-home">
-                <Link href="/">
-                  <Home size={16} /> Về thư viện phòng
-                </Link>
+              <Button
+                variant="outline"
+                className="btn-home"
+                onClick={() => {
+                  window.location.href = "/";
+                }}
+              >
+                <Home size={16} /> Về thư viện phòng
               </Button>
             </div>
           </div>

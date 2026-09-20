@@ -2,6 +2,7 @@ import type { GameSession, GridCellStatus, StageConfig } from "./game-types";
 
 export const OFFICIAL_SESSION_ID = "11111111-1111-4111-8111-111111111111";
 export const OFFICIAL_IMAGE_URL = "/symbolic-party-house.jpg";
+export const DEFAULT_BG_MUSIC_URL = "https://assets.mixkit.co/music/preview/mixkit-game-level-music-689.mp3";
 
 export const COMMUNITY_PRESETS = [
   {
@@ -216,6 +217,7 @@ export function createDemoSession(sessionId = OFFICIAL_SESSION_ID): GameSession 
       gridCols: squareGrid.cols,
       quoteText: "Đoàn kết, đoàn kết, đại đoàn kết. Thành công, thành công, đại thành công! — Chủ tịch Hồ Chí Minh",
       stagesData: structuredClone(STAGE_TEMPLATES),
+      bgMusicUrl: DEFAULT_BG_MUSIC_URL,
     },
     members: [
       { id: "11111111-0000-0000-0000-000000000001", sessionId, name: "Kỹ sư trưởng", avatarUrl: "", color: "#b91f2e" },
@@ -226,6 +228,7 @@ export function createDemoSession(sessionId = OFFICIAL_SESSION_ID): GameSession 
       gridStatus: createGridStatus(squareGrid.rows, squareGrid.cols),
       questionCursor: { "1": 0, "2": 0, "3": 0, "4": 0 },
       completed: false,
+      bgMusicUrl: DEFAULT_BG_MUSIC_URL,
       updatedAt: new Date().toISOString(),
     },
   };

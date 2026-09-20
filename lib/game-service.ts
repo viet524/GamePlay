@@ -1,6 +1,6 @@
 import { createClient, type RealtimeChannel, type SupabaseClient } from "@supabase/supabase-js";
-import { createDemoSession, createGridStatus, getAutomaticGrid } from "./mock-game";
-import type { GameSession, GameState, RoomSummary } from "./game-types";
+import { DEFAULT_BG_MUSIC_URL, createDemoSession, createGridStatus, getAutomaticGrid } from "./mock-game";
+import type { GameSession, GameState, RoomSummary, StageConfig } from "./game-types";
 
 const LOCAL_PREFIX = "xay-nha-dang:";
 const CHANNEL_NAME = "xay-nha-dang-sync";
@@ -68,6 +68,13 @@ export async function loadSession(sessionId: string): Promise<GameSession> {
   if (!config) return normalizeSessionGrid(readLocal(sessionId) ?? createDemoSession(sessionId));
   const rows = Number(config.grid_rows);
   const cols = Number(config.grid_cols);
+  const stages = (config.stages_data ?? []) as StageConfig[];
+  const configObj = config as Record<string, unknown>;
+  const configMusic = (configObj.bg_music_url as string | undefined)
+    ?? (stages[0] as unknown as { bgMusicUrl?: string })?.bgMusicUrl
+    ?? DEFAULT_BG_MUSIC_URL;
+  const effectiveMusic = (state?.bg_music_url as string | undefined) ?? configMusic;
+
   return normalizeSessionGrid({
     config: {
       sessionId,
@@ -78,7 +85,8 @@ export async function loadSession(sessionId: string): Promise<GameSession> {
       gridRows: rows,
       gridCols: cols,
       quoteText: config.quote_text,
-      stagesData: config.stages_data,
+      stagesData: stages,
+      bgMusicUrl: configMusic,
     },
     members: (members ?? []).map((member) => ({
       id: member.id,
@@ -95,7 +103,7 @@ export async function loadSession(sessionId: string): Promise<GameSession> {
       completed: Boolean(state.completed),
       hasGuessedCorrectly: Boolean(state.has_guessed_correctly),
       guessedName: state.guessed_name ?? undefined,
-      bgMusicUrl: state.bg_music_url ?? undefined,
+      bgMusicUrl: effectiveMusic,
       updatedAt: state.updated_at,
     } : {
       sessionId,
@@ -105,13 +113,16 @@ export async function loadSession(sessionId: string): Promise<GameSession> {
       completed: false,
       hasGuessedCorrectly: false,
       guessedName: undefined,
-      bgMusicUrl: undefined,
+      bgMusicUrl: effectiveMusic,
       updatedAt: new Date().toISOString(),
     },
   });
 }
 
 export async function saveSession(session: GameSession): Promise<void> {
+  if (session.config.stagesData.length > 0 && session.config.bgMusicUrl) {
+    (session.config.stagesData[0] as unknown as { bgMusicUrl?: string }).bgMusicUrl = session.config.bgMusicUrl;
+  }
   writeLocal(session);
   const supabase = getSupabase();
   if (!supabase) return;
@@ -220,18 +231,32 @@ export async function saveGameState(state: GameState): Promise<void> {
   writeLocal({ ...stored, state });
   const supabase = getSupabase();
   if (!supabase) return;
-  const { error } = await supabase.from("GameState").upsert({
-    session_id: state.sessionId,
-    current_stage: state.currentStage,
-    grid_status: state.gridStatus,
-    question_cursor: state.questionCursor,
-    completed: state.completed,
-    has_guessed_correctly: state.hasGuessedCorrectly ?? false,
-    guessed_name: state.guessedName ?? null,
-    bg_music_url: state.bgMusicUrl ?? null,
-    updated_at: state.updatedAt,
-  });
-  if (error) throw error;
+  try {
+    const { error } = await supabase.from("GameState").upsert({
+      session_id: state.sessionId,
+      current_stage: state.currentStage,
+      grid_status: state.gridStatus,
+      question_cursor: state.questionCursor,
+      completed: state.completed,
+      has_guessed_correctly: state.hasGuessedCorrectly ?? false,
+      guessed_name: state.guessedName ?? null,
+      bg_music_url: state.bgMusicUrl ?? null,
+      updated_at: state.updatedAt,
+    });
+    if (error) {
+      console.warn("Supabase upsert GameState full error, falling back:", error.message);
+      await supabase.from("GameState").upsert({
+        session_id: state.sessionId,
+        current_stage: state.currentStage,
+        grid_status: state.gridStatus,
+        question_cursor: state.questionCursor,
+        completed: state.completed,
+        updated_at: state.updatedAt,
+      });
+    }
+  } catch (err) {
+    console.error("Failed to save GameState to Supabase:", err);
+  }
 }
 
 export function subscribeToGameState(sessionId: string, onState: (state: GameState) => void) {
@@ -271,7 +296,7 @@ export function subscribeToGameState(sessionId: string, onState: (state: GameSta
   };
 }
 
-export async function uploadAsset(file: File, sessionId: string, kind: "building" | "avatar") {
+export async function uploadAsset(file: File, sessionId: string, kind: "building" | "avatar" | "audio") {
   const supabase = getSupabase();
   if (!supabase) return fileToDataUrl(file);
   const safeName = file.name.toLowerCase().replace(/[^a-z0-9.]+/g, "-");
@@ -315,9 +340,47 @@ export async function resetGameState(session: GameSession): Promise<GameState> {
     completed: false,
     hasGuessedCorrectly: false,
     guessedName: undefined,
+    bgMusicUrl: session.state.bgMusicUrl ?? session.config.bgMusicUrl,
     updatedAt: new Date().toISOString(),
   };
   await saveGameState(newState);
   return newState;
+}
+
+export async function applyMusicToAllRooms(musicUrl: string): Promise<void> {
+  if (typeof window !== "undefined") {
+    for (let index = 0; index < localStorage.length; index += 1) {
+      const key = localStorage.key(index);
+      if (!key?.startsWith(LOCAL_PREFIX)) continue;
+      try {
+        const room = JSON.parse(localStorage.getItem(key) ?? "") as GameSession;
+        room.config.bgMusicUrl = musicUrl;
+        room.state.bgMusicUrl = musicUrl;
+        if (room.config.stagesData.length > 0) {
+          (room.config.stagesData[0] as unknown as { bgMusicUrl?: string }).bgMusicUrl = musicUrl;
+        }
+        localStorage.setItem(key, JSON.stringify(room));
+      } catch { /* ignore */ }
+    }
+  }
+  const supabase = getSupabase();
+  if (!supabase) return;
+  try {
+    const { data: configs } = await supabase.from("GameConfig").select("session_id, stages_data");
+    if (configs && configs.length > 0) {
+      for (const item of configs) {
+        const stages = (item.stages_data ?? []) as StageConfig[];
+        if (stages.length > 0) {
+          (stages[0] as unknown as { bgMusicUrl?: string }).bgMusicUrl = musicUrl;
+        }
+        await supabase.from("GameConfig").update({ stages_data: stages }).eq("session_id", item.session_id);
+        try {
+          await supabase.from("GameState").update({ bg_music_url: musicUrl }).eq("session_id", item.session_id);
+        } catch { /* optional column */ }
+      }
+    }
+  } catch (err) {
+    console.error("Error applying music to all rooms in Supabase:", err);
+  }
 }
 

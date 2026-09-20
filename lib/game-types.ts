@@ -1,4 +1,4 @@
-export type QuestionType = "mcq" | "crossword";
+export type QuestionType = "mcq" | "multi_select" | "true_false" | "crossword";
 export type CellState = "empty" | "built" | "failed";
 
 export interface Question {
@@ -35,6 +35,7 @@ export interface GameConfig {
   gridCols: number;
   quoteText: string;
   stagesData: StageConfig[];
+  bgMusicUrl?: string;
 }
 
 export interface RoomSummary {
