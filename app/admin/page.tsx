@@ -39,7 +39,7 @@ import {
 } from "@/lib/game-service";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import type { GameSession, Question, RoomSummary } from "@/lib/game-types";
-import { hasGameProgress } from "@/lib/game-types";
+import { canEnterFinale, hasGameProgress } from "@/lib/game-types";
 import {
   detectCsvDelimiter,
   getBackupsForParent,
@@ -492,6 +492,11 @@ export default function AdminPage() {
     setIsCheckingPlay(true);
     try {
       const loaded = await loadSession(session.config.sessionId);
+      if (loaded.state.completed || canEnterFinale(loaded.state)) {
+        await resetGameState(loaded);
+        window.location.href = playPath;
+        return;
+      }
       if (!hasGameProgress(loaded.state)) {
         window.location.href = playPath;
         return;

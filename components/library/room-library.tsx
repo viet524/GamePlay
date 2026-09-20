@@ -8,7 +8,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { COMMUNITY_PRESETS, createGridStatus } from "@/lib/mock-game";
 import { deleteRoom, listPublicRooms, loadSession, resetGameState, saveSession, uploadAsset } from "@/lib/game-service";
 import type { GameSession, RoomSummary } from "@/lib/game-types";
-import { hasGameProgress } from "@/lib/game-types";
+import { canEnterFinale, hasGameProgress } from "@/lib/game-types";
 
 export function RoomLibrary() {
   const [rooms, setRooms] = useState<RoomSummary[]>(COMMUNITY_PRESETS);
@@ -90,10 +90,13 @@ export function RoomLibrary() {
     setIsCheckingPlay(true);
     try {
       const loaded = await loadSession(room.sessionId);
-      const hasProgress = hasGameProgress(loaded.state);
-
       setSelectedRoom(null);
-      if (!hasProgress) {
+      if (loaded.state.completed || canEnterFinale(loaded.state)) {
+        await resetGameState(loaded);
+        window.location.href = `/play/${room.sessionId}`;
+        return;
+      }
+      if (!hasGameProgress(loaded.state)) {
         window.location.href = `/play/${room.sessionId}`;
         return;
       }
