@@ -8,6 +8,8 @@ import {
   Construction,
   Hammer,
   Home,
+  Maximize2,
+  Minimize2,
   Music,
   Music2,
   Pause,
@@ -24,6 +26,7 @@ import {
   X,
   Image as ImageIcon,
 } from "lucide-react";
+import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -91,6 +94,7 @@ export function GameExperience({ sessionId }: { sessionId: string }) {
   const [activeCell, setActiveCell] = useState<string | null>(null);
   const [activeMember, setActiveMember] = useState<TeamMember | null>(null);
   const [questionOpen, setQuestionOpen] = useState(false);
+  const [isQuestionMaximized, setIsQuestionMaximized] = useState(false);
   const [symbolicOpen, setSymbolicOpen] = useState(false);
   const [result, setResult] = useState<ResultMessage>(null);
   const [answer, setAnswer] = useState("");
@@ -132,6 +136,28 @@ export function GameExperience({ sessionId }: { sessionId: string }) {
 
   const stageRef = useRef<HTMLDivElement>(null);
   const cellRefs = useRef<Record<string, HTMLButtonElement | null>>({});
+
+  const toggleQuestionMaximized = useCallback(() => {
+    setIsQuestionMaximized((prev) => !prev);
+  }, []);
+
+  useEffect(() => {
+    if (!questionOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (
+        e.target instanceof HTMLInputElement ||
+        e.target instanceof HTMLTextAreaElement
+      ) {
+        return;
+      }
+      if (e.key === "f" || e.key === "F") {
+        e.preventDefault();
+        setIsQuestionMaximized((prev) => !prev);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [questionOpen]);
 
   useEffect(() => {
     let mounted = true;
@@ -1115,7 +1141,20 @@ export function GameExperience({ sessionId }: { sessionId: string }) {
 
       {/* Dialog trả lời câu hỏi với phản hồi trực quan màu xanh/đỏ */}
       <Dialog open={questionOpen} onOpenChange={(open) => !isSaving && quizState === "answering" && setQuestionOpen(open)}>
-        <DialogContent className="game-dialog sm:max-w-2xl">
+        <DialogContent className={cn("game-dialog sm:max-w-2xl", isQuestionMaximized && "is-maximized")}>
+          <div className="game-dialog-actions">
+            <button
+              type="button"
+              className="btn-dialog-action btn-fullscreen-toggle"
+              onClick={toggleQuestionMaximized}
+              title={isQuestionMaximized ? "Thu nhỏ cửa sổ (Phím F / Esc)" : "Phóng to toàn màn hình (Phím F)"}
+              aria-label={isQuestionMaximized ? "Thu nhỏ" : "Phóng to toàn màn hình"}
+            >
+              {isQuestionMaximized ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
+              <span className="action-label">{isQuestionMaximized ? "Thu nhỏ" : "Toàn màn hình"}</span>
+            </button>
+          </div>
+
           <DialogHeader>
             <span className="dialog-kicker">
               MẢNH GHÉP SỐ {selectedTargetIndex !== null ? selectedTargetIndex + 1 : ""} · {selectedQuestion?.isBackup ? "CÂU HỎI PHỤ" : "CÂU HỎI CHÍNH"}

@@ -340,7 +340,281 @@ textarea { white-space: pre-wrap; word-break: break-word; overflow-wrap: anywher
 /* Dialogs */
 .game-dialog { color: #193a32; background: #fffdf7; border: 1px solid #d9cdb4; border-radius: 18px; padding: 26px; box-shadow: 0 30px 90px rgba(20,45,36,.27); height: auto !important; max-height: 90vh; overflow-x: hidden; overflow-y: auto; }
 .game-dialog [data-slot="dialog-title"] { font-family: 'Be Vietnam Pro', system-ui, -apple-system, BlinkMacSystemFont, sans-serif !important; font-size: 1.45rem; font-weight: 750; line-height: 1.4 !important; letter-spacing: -0.01em; white-space: normal; overflow-wrap: anywhere; word-break: break-word; }
-.dialog-kicker { color: #a17f2b; font-size: .69rem; font-weight: 900; letter-spacing: .12em; overflow-wrap: anywhere; }
+.dialog-kicker { color: #a17f2b; font-size: .69rem; font-weight: 900; letter-spacing: .12em; overflow-wrap: anywhere; max-width: calc(100% - 150px); display: inline-block; }
+
+/* Dialog Controls & Fullscreen Maximized Mode */
+.game-dialog-actions {
+  position: absolute;
+  top: 15px;
+  right: 48px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  z-index: 20;
+}
+
+.btn-dialog-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 11px;
+  background: #fbf6ec;
+  color: #8c242c;
+  border: 1.5px solid #d9cdb4;
+  border-radius: 8px;
+  font-size: 0.8rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  user-select: none;
+}
+
+.btn-dialog-action:hover {
+  background: #f5ecd8;
+  border-color: #b91f2e;
+  color: #b91f2e;
+  transform: translateY(-1px);
+}
+
+.btn-dialog-action:active {
+  transform: translateY(0);
+}
+
+@media (max-width: 480px) {
+  .btn-dialog-action .action-label {
+    display: none;
+  }
+  .btn-dialog-action {
+    padding: 6px;
+  }
+}
+
+/* Maximized / Fullscreen Question Dialog */
+.game-dialog.is-maximized {
+  position: fixed !important;
+  inset: 0 !important;
+  top: 0 !important;
+  left: 0 !important;
+  right: 0 !important;
+  bottom: 0 !important;
+  transform: none !important;
+  width: 100vw !important;
+  max-width: 100vw !important;
+  height: 100vh !important;
+  max-height: 100vh !important;
+  border-radius: 0 !important;
+  border: none !important;
+  padding: clamp(20px, 3.5vh, 40px) clamp(24px, 5vw, 64px) !important;
+  z-index: 60 !important;
+  display: flex !important;
+  flex-direction: column !important;
+  justify-content: flex-start !important;
+  gap: clamp(14px, 2vh, 22px) !important;
+  overflow-y: auto !important;
+  background: #fffdf7 !important;
+  box-shadow: none !important;
+}
+
+.game-dialog.is-maximized .game-dialog-actions {
+  top: 20px;
+  right: 68px;
+}
+
+.game-dialog.is-maximized .btn-dialog-action {
+  padding: 8px 16px;
+  font-size: 0.95rem;
+  background: #b91f2e;
+  color: #ffffff;
+  border-color: #941723;
+  box-shadow: 0 3px 10px rgba(185, 31, 46, 0.28);
+}
+
+.game-dialog.is-maximized .btn-dialog-action:hover {
+  background: #9e1724;
+  color: #ffffff;
+}
+
+.game-dialog.is-maximized [data-slot="dialog-close"] {
+  top: 20px;
+  right: 22px;
+  width: 38px;
+  height: 38px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  background: #f4eee1;
+  opacity: 0.85;
+}
+
+.game-dialog.is-maximized [data-slot="dialog-close"]:hover {
+  opacity: 1;
+  background: #eae1cd;
+}
+
+.game-dialog.is-maximized [data-slot="dialog-close"] svg {
+  width: 20px !important;
+  height: 20px !important;
+}
+
+/* Maximized Presentation Typography */
+.game-dialog.is-maximized .dialog-kicker {
+  font-size: clamp(0.95rem, 1.25vw, 1.2rem);
+  letter-spacing: 0.12em;
+  padding: 6px 16px;
+  background: #fdf3de;
+  border: 1px solid #ebd8b0;
+  border-radius: 999px;
+  width: fit-content;
+  color: #926915;
+}
+
+.game-dialog.is-maximized [data-slot="dialog-title"] {
+  font-size: clamp(2rem, 3.2vw, 3.2rem) !important;
+  line-height: 1.35 !important;
+  font-weight: 800 !important;
+  color: #112822 !important;
+  margin-top: 6px;
+  letter-spacing: -0.02em;
+}
+
+.game-dialog.is-maximized [data-slot="dialog-description"] {
+  font-size: clamp(1.15rem, 1.45vw, 1.4rem) !important;
+  line-height: 1.45;
+  color: #51645c;
+  font-weight: 500;
+  margin-top: 2px;
+}
+
+/* Maximized Options Grid - 2 columns on wide screens */
+.game-dialog.is-maximized .answer-options {
+  gap: clamp(12px, 1.6vh, 18px);
+  margin-top: 8px;
+  flex: 1 1 auto;
+}
+
+@media (min-width: 900px) {
+  .game-dialog.is-maximized .answer-options {
+    display: grid !important;
+    grid-template-columns: 1fr 1fr !important;
+    gap: 16px 20px !important;
+  }
+}
+
+.game-dialog.is-maximized .multi-opt-btn,
+.game-dialog.is-maximized .answer-options button {
+  min-height: clamp(68px, 8.5vh, 88px);
+  padding: clamp(14px, 1.8vh, 20px) clamp(18px, 2vw, 24px);
+  border-radius: 14px;
+  border-width: 2px;
+  gap: 16px;
+  align-items: center;
+}
+
+.game-dialog.is-maximized .multi-opt-btn .option-code,
+.game-dialog.is-maximized .answer-options button > .option-code {
+  width: clamp(40px, 4.8vh, 48px);
+  height: clamp(40px, 4.8vh, 48px);
+  border-radius: 10px;
+  font-size: clamp(1.15rem, 1.35vw, 1.4rem);
+  font-weight: 850;
+}
+
+.game-dialog.is-maximized .multi-opt-btn .option-text,
+.game-dialog.is-maximized .answer-options button > .option-text {
+  font-size: clamp(1.3rem, 1.8vw, 1.75rem);
+  line-height: 1.4;
+  font-weight: 600;
+}
+
+.game-dialog.is-maximized .checkbox-indicator {
+  width: clamp(26px, 3.2vh, 32px);
+  height: clamp(26px, 3.2vh, 32px);
+  border-radius: 8px;
+  border-width: 2px;
+}
+
+/* Maximized True / False */
+.game-dialog.is-maximized .tf-options-grid {
+  gap: 24px;
+  margin: 16px 0;
+  flex: 1 1 auto;
+}
+
+.game-dialog.is-maximized .btn-tf-game {
+  padding: clamp(32px, 6vh, 48px) 24px;
+  font-size: clamp(1.8rem, 2.6vw, 2.5rem);
+  border-radius: 20px;
+  border-width: 3px;
+  gap: 14px;
+}
+
+.game-dialog.is-maximized .btn-tf-game svg {
+  width: clamp(38px, 4.5vw, 52px);
+  height: clamp(38px, 4.5vw, 52px);
+}
+
+.game-dialog.is-maximized .tf-badge-result {
+  font-size: 1.05rem;
+  padding: 6px 16px;
+}
+
+/* Maximized Crossword */
+.game-dialog.is-maximized .crossword-answer {
+  gap: 12px;
+  margin: 16px 0;
+}
+
+.game-dialog.is-maximized .crossword-answer > span {
+  font-size: 1rem;
+  letter-spacing: 0.15em;
+}
+
+.game-dialog.is-maximized .crossword-answer input {
+  min-height: clamp(64px, 8vh, 80px);
+  font-size: clamp(1.5rem, 2.2vw, 2.2rem);
+  font-weight: 700;
+  padding: 14px 22px;
+  border-radius: 14px;
+  border-width: 2px;
+}
+
+/* Maximized Feedback Banner */
+.game-dialog.is-maximized .quiz-feedback-banner {
+  padding: clamp(16px, 2.2vh, 24px) clamp(20px, 2.5vw, 28px);
+  border-radius: 14px;
+  border-width: 2px;
+  gap: 16px;
+  margin-top: 8px;
+}
+
+.game-dialog.is-maximized .quiz-feedback-banner strong {
+  font-size: clamp(1.2rem, 1.6vw, 1.55rem);
+  margin-bottom: 4px;
+}
+
+.game-dialog.is-maximized .quiz-feedback-banner span {
+  font-size: clamp(1.1rem, 1.35vw, 1.35rem);
+  line-height: 1.45;
+}
+
+.game-dialog.is-maximized .quiz-feedback-banner svg {
+  width: 30px;
+  height: 30px;
+}
+
+/* Maximized Dialog Footer */
+.game-dialog.is-maximized [data-slot="dialog-footer"] {
+  margin-top: auto;
+  padding-top: 14px;
+  gap: 16px;
+}
+
+.game-dialog.is-maximized [data-slot="dialog-footer"] button {
+  min-height: clamp(50px, 6.5vh, 60px);
+  font-size: clamp(1.1rem, 1.4vw, 1.3rem);
+  padding: 12px 28px;
+  border-radius: 12px;
+}
 .engineer-picker { display: flex; gap: 8px; overflow-x: auto; padding: 4px 2px; }.engineer-picker button { min-width: 86px; display: flex; flex-direction: column; align-items: center; gap: 5px; padding: 9px; color: #64736e; background: transparent; border: 1px solid #ddd5c6; border-radius: 11px; font-size: .7rem; cursor: pointer; }.engineer-picker button[data-active="true"] { color: #173b32; background: #f3ead4; border-color: #caa84e; box-shadow: inset 0 0 0 1px #caa84e; }.engineer-picker .avatar { width: 34px; height: 34px; }
 .answer-options {
   display: flex;
