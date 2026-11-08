@@ -94,7 +94,7 @@ export function GameExperience({ sessionId }: { sessionId: string }) {
   const [activeCell, setActiveCell] = useState<string | null>(null);
   const [activeMember, setActiveMember] = useState<TeamMember | null>(null);
   const [questionOpen, setQuestionOpen] = useState(false);
-  const [isQuestionMaximized, setIsQuestionMaximized] = useState(true);
+  const [isQuestionMaximized, setIsQuestionMaximized] = useState(false);
   const [isBrowserFullscreen, setIsBrowserFullscreen] = useState(false);
   const [symbolicOpen, setSymbolicOpen] = useState(false);
   const [result, setResult] = useState<ResultMessage>(null);
@@ -591,7 +591,7 @@ export function GameExperience({ sessionId }: { sessionId: string }) {
     setSelectedMultiAnswers([]);
     setQuizState("answering");
     setIsCorrectResult(null);
-    setIsQuestionMaximized(true);
+    setIsQuestionMaximized(false);
     setQuestionOpen(true);
   };
 
