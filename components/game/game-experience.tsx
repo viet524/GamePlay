@@ -1173,7 +1173,7 @@ export function GameExperience({ sessionId }: { sessionId: string }) {
             "game-dialog",
             isQuestionMaximized
               ? "is-maximized fixed inset-0 top-0 left-0 translate-x-0 translate-y-0 w-screen h-screen max-w-none sm:max-w-none max-h-none rounded-none m-0"
-              : "sm:max-w-2xl"
+              : "is-minimized fixed inset-0 m-auto translate-x-0 translate-y-0 sm:max-w-2xl"
           )}
         >
           <div className="game-dialog-actions">
