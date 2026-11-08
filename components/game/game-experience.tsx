@@ -94,7 +94,8 @@ export function GameExperience({ sessionId }: { sessionId: string }) {
   const [activeCell, setActiveCell] = useState<string | null>(null);
   const [activeMember, setActiveMember] = useState<TeamMember | null>(null);
   const [questionOpen, setQuestionOpen] = useState(false);
-  const [isQuestionMaximized, setIsQuestionMaximized] = useState(false);
+  const [isQuestionMaximized, setIsQuestionMaximized] = useState(true);
+  const [isBrowserFullscreen, setIsBrowserFullscreen] = useState(false);
   const [symbolicOpen, setSymbolicOpen] = useState(false);
   const [result, setResult] = useState<ResultMessage>(null);
   const [answer, setAnswer] = useState("");
@@ -139,6 +140,22 @@ export function GameExperience({ sessionId }: { sessionId: string }) {
 
   const toggleQuestionMaximized = useCallback(() => {
     setIsQuestionMaximized((prev) => !prev);
+  }, []);
+
+  const toggleBrowserFullscreen = useCallback(() => {
+    if (!document.fullscreenElement) {
+      void document.documentElement.requestFullscreen().catch(() => {});
+    } else {
+      void document.exitFullscreen().catch(() => {});
+    }
+  }, []);
+
+  useEffect(() => {
+    const handleFsChange = () => {
+      setIsBrowserFullscreen(Boolean(document.fullscreenElement));
+    };
+    document.addEventListener("fullscreenchange", handleFsChange);
+    return () => document.removeEventListener("fullscreenchange", handleFsChange);
   }, []);
 
   useEffect(() => {
@@ -574,6 +591,7 @@ export function GameExperience({ sessionId }: { sessionId: string }) {
     setSelectedMultiAnswers([]);
     setQuizState("answering");
     setIsCorrectResult(null);
+    setIsQuestionMaximized(true);
     setQuestionOpen(true);
   };
 
@@ -838,6 +856,15 @@ export function GameExperience({ sessionId }: { sessionId: string }) {
               <Music size={14} />
             </button>
           </div>
+          <Button
+            variant="outline"
+            className="reset-topbar-btn"
+            title={isBrowserFullscreen ? "Thu nhỏ cửa sổ web" : "Toàn màn hình trang web (F11)"}
+            onClick={toggleBrowserFullscreen}
+          >
+            {isBrowserFullscreen ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+            <span>{isBrowserFullscreen ? "Thu nhỏ web" : "Toàn màn hình web"}</span>
+          </Button>
           <Button
             variant="outline"
             className="reset-topbar-btn"
@@ -1141,7 +1168,14 @@ export function GameExperience({ sessionId }: { sessionId: string }) {
 
       {/* Dialog trả lời câu hỏi với phản hồi trực quan màu xanh/đỏ */}
       <Dialog open={questionOpen} onOpenChange={(open) => !isSaving && quizState === "answering" && setQuestionOpen(open)}>
-        <DialogContent className={cn("game-dialog sm:max-w-2xl", isQuestionMaximized && "is-maximized")}>
+        <DialogContent
+          className={cn(
+            "game-dialog",
+            isQuestionMaximized
+              ? "is-maximized fixed inset-0 top-0 left-0 translate-x-0 translate-y-0 w-screen h-screen max-w-none sm:max-w-none max-h-none rounded-none m-0"
+              : "sm:max-w-2xl"
+          )}
+        >
           <div className="game-dialog-actions">
             <button
               type="button"
